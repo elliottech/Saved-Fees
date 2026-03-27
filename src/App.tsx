@@ -230,7 +230,7 @@ async function estimateSavings(address: string, win: string): Promise<SavingsEst
     window: win,
     estimated_hl_fees_paid: estimatedFees,
     estimated_savings: estimatedFees,
-    fee_assumption: 'Lighter Standard Accounts: 0 maker / 0 taker',
+    fee_assumption: 'Zero-fee venue: 0 maker / 0 taker',
     estimation_mode: mode,
     current_rates: rates,
     recent_blended_perp_rate: recentBlended,
@@ -375,18 +375,6 @@ function modeLabel(mode: string): string {
 function Card({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return (
     <div className={`card ${className}`}>
-      <svg className="corner-mark corner-tl" width="4" height="4" viewBox="0 0 4 4" fill="none">
-        <path d="M0 0H4V1H1V4H0V0Z" fill="#2b2b30" />
-      </svg>
-      <svg className="corner-mark corner-tr" width="4" height="4" viewBox="0 0 4 4" fill="none">
-        <path d="M0 0H4V4H3V1H0V0Z" fill="#2b2b30" />
-      </svg>
-      <svg className="corner-mark corner-bl" width="4" height="4" viewBox="0 0 4 4" fill="none">
-        <path d="M0 0H1V3H4V4H0V0Z" fill="#2b2b30" />
-      </svg>
-      <svg className="corner-mark corner-br" width="4" height="4" viewBox="0 0 4 4" fill="none">
-        <path d="M4 0V4H0V3H3V0H4Z" fill="#2b2b30" />
-      </svg>
       {children}
     </div>
   )
@@ -537,7 +525,7 @@ function App() {
     if (!cardImage) return
     const a = document.createElement('a')
     a.href = cardImage
-    a.download = `Lighter_Fee_Savings_${shortenAddress(result?.address || '')}.png`
+    a.download = `Fee_Savings_${shortenAddress(result?.address || '')}.png`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -558,8 +546,8 @@ function App() {
         <div className="header">
           <h1>Fee Savings Estimate</h1>
           <p>
-            Estimate Hyperliquid trading fees and compare against Lighter&apos;s
-            zero-fee standard accounts.
+            Estimate Hyperliquid trading fees and compare against zero-fee
+            trading.
           </p>
         </div>
 
@@ -605,7 +593,7 @@ function App() {
             <>
               <hr className="divider" />
               <div className="primary-metric">
-                <span className="stat-label">Estimated Savings</span>
+                <span className="stat-label">Estimated Savings with Lighter Zero Fees</span>
                 <div className="primary-value-row">
                   <span className="primary-value">
                     {fmtUsd(result.estimated_savings)}
@@ -636,7 +624,6 @@ function App() {
         )}
       </main>
 
-      <div className="fade-bottom" />
 
       {/* Card Modal */}
       {showCardModal && cardImage && (
@@ -661,7 +648,7 @@ function App() {
               <img
                 ref={cardImgRef}
                 src={cardImage}
-                alt="Lighter Fee Savings Card"
+                alt="Fee Savings Card"
               />
             </div>
 
