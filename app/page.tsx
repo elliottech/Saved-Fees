@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import App from "@/App";
 import "@/styles.css";
 
@@ -6,16 +7,25 @@ interface PageProps {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }
 
+function getBaseUrl(headersList: Headers): string {
+  const host = headersList.get("x-forwarded-host") || headersList.get("host") || "howmuchfeeipaid.wtf";
+  const proto = headersList.get("x-forwarded-proto") || "https";
+  return `${proto}://${host}`;
+}
+
 export async function generateMetadata({
   searchParams,
 }: PageProps): Promise<Metadata> {
   const params = await searchParams;
+  const headersList = await headers();
+  const baseUrl = getBaseUrl(headersList);
+
   const address =
     typeof params.address === "string" ? params.address.trim().toLowerCase() : "";
   const isValidAddress = /^0x[a-fA-F0-9]{40}$/.test(address);
 
   if (isValidAddress) {
-    const ogImageUrl = `/api/og-image?address=${encodeURIComponent(address)}`;
+    const ogImageUrl = `${baseUrl}/api/og-image?address=${encodeURIComponent(address)}`;
     return {
       title: "Trading Fee Analysis | tradingfees.wtf",
       description:
@@ -43,7 +53,7 @@ export async function generateMetadata({
     };
   }
 
-  const defaultOgImage = "/api/og-image";
+  const defaultOgImage = `${baseUrl}/api/og-image`;
   return {
     title: "tradingfees.wtf",
     description:
