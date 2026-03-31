@@ -1,3 +1,5 @@
+"use client";
+
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
   analyzeFees,
@@ -437,10 +439,12 @@ function ExchDiffDisplay({
 // ── Main App ────────────────────────────────────────────────────────────────
 export default function App() {
   const [theme, setTheme] = useState<Theme>(() => {
+    if (typeof window === "undefined") return "light";
     const saved = localStorage.getItem("tfw_theme");
     return VALID_THEMES.includes(saved as Theme) ? (saved as Theme) : "light";
   });
   const [currentWindow, setCurrentWindow] = useState<TimeWindow>(() => {
+    if (typeof window === "undefined") return "all";
     const saved = localStorage.getItem("tfw_window");
     return VALID_WINDOWS.includes(saved as TimeWindow) ? (saved as TimeWindow) : "all";
   });
