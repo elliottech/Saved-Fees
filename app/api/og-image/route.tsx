@@ -73,10 +73,6 @@ const BYBIT_TIERS: Tier[] = [
   { name: "Supreme VIP (>$500M)", min_volume: 500_000_000, maker: 0.0, taker: 0.0003 },
 ];
 
-const STABLE_FEE_TOKENS = new Set([
-  "USDC", "USDT", "USDT0", "USDH", "USDE", "USDHL", "USDXL", "DAI",
-]);
-
 function getTier(tiers: Tier[], volume: number): Tier {
   let matched = tiers[0]!;
   for (const tier of tiers) {
@@ -97,57 +93,7 @@ async function postHL(payload: Record<string, unknown>): Promise<unknown> {
   return resp.json();
 }
 
-interface Fill {
-  px: string;
-  sz: string;
-  fee: string;
-  feeToken?: string;
-  crossed?: boolean;
-  coin: string;
-  time: string | number;
-  tid?: string;
-}
-
-async function fetchFillsForOG(address: string): Promise<Fill[]> {
-  const fills = (await postHL({ type: "userFills", user: address })) as Fill[];
-  if (!fills || fills.length === 0) return [];
-
-  const allFills: Fill[] = [...fills];
-  const seenTids = new Set(allFills.map((f) => f.tid).filter(Boolean));
-
-  // Paginate up to ~10k fills for OG (keep it fast)
-  if (fills.length >= 2000) {
-    let earliestTime = Math.min(...fills.map((f) => Number(f.time)));
-    let pages = 0;
-
-    while (allFills.length < 10000 && pages < 4) {
-      const page = (await postHL({
-        type: "userFillsByTime",
-        user: address,
-        startTime: 0,
-        endTime: earliestTime - 1,
-      })) as Fill[];
-
-      if (!page || page.length === 0) break;
-
-      const newFills = page.filter((f) => !seenTids.has(f.tid));
-      if (newFills.length === 0) break;
-
-      allFills.push(...newFills);
-      for (const f of newFills) {
-        if (f.tid) seenTids.add(f.tid);
-      }
-
-      if (page.length < 2000) break;
-      earliestTime = Math.min(...newFills.map((f) => Number(f.time)));
-      pages++;
-    }
-  }
-
-  return allFills;
-}
-
-/* ── Quick analysis for OG ───────────────────────────────────────────────── */
+/* ── Quick analysis for OG (volume-based, no fills needed) ───────────────── */
 
 interface OGData {
   totalFeesPaid: number;
@@ -158,39 +104,54 @@ interface OGData {
   bybit: { totalFees: number; takerRate: number; makerRate: number; diffVsHl: number };
 }
 
+/**
+ * Estimate fees from userFees + portfolio endpoints (~40 API weight total)
+ * instead of fetching individual fills (~600 weight).
+ */
 async function analyzeForOG(address: string): Promise<OGData | null> {
-  const [fills] = await Promise.all([fetchFillsForOG(address)]);
+  const [userFeesData, portfolioData] = await Promise.all([
+    postHL({ type: "userFees", user: address }) as Promise<Record<string, unknown>>,
+    postHL({ type: "portfolio", user: address }) as Promise<unknown[]>,
+  ]);
 
-  if (fills.length === 0) return null;
-
-  let totalVolume = 0;
-  let takerVolume = 0;
-  let makerVolume = 0;
-  let totalHlFees = 0;
-
-  for (const fill of fills) {
-    const px = Number(fill.px || 0);
-    const sz = Number(fill.sz || 0);
-    const notional = px * sz;
-    const rawFee = Number(fill.fee || 0);
-    const feeToken = fill.feeToken || "USDC";
-    const isTaker = fill.crossed !== false;
-
-    const feeUsd = STABLE_FEE_TOKENS.has(feeToken) ? rawFee : rawFee * px;
-
-    totalVolume += notional;
-    totalHlFees += feeUsd;
-    if (isTaker) takerVolume += notional;
-    else makerVolume += notional;
+  // Extract all-time volume from portfolio
+  let totalVolume: number | null = null;
+  for (const bucket of portfolioData ?? []) {
+    if (!Array.isArray(bucket) || bucket.length !== 2) continue;
+    if (bucket[0] !== "allTime" || typeof bucket[1] !== "object" || bucket[1] === null) continue;
+    const vlm = (bucket[1] as Record<string, unknown>).vlm;
+    const val = Number(vlm);
+    if (!isNaN(val)) totalVolume = val;
   }
 
-  const times = fills.map((f) => Number(f.time));
-  const periodStart = Math.min(...times);
-  const periodEnd = Math.max(...times);
-  const tradingDays = Math.max((periodEnd - periodStart) / (86400 * 1000), 1);
+  if (totalVolume === null || totalVolume <= 0) return null;
 
-  const estimated14dVol = tradingDays > 14 ? totalVolume * (14 / tradingDays) : totalVolume;
-  const estimated30dVol = tradingDays > 30 ? totalVolume * (30 / tradingDays) : totalVolume;
+  // Get user's actual fee rates
+  const hlTakerRate = Number(userFeesData.userCrossRate || "0.00045");
+  const hlMakerRate = Number(userFeesData.userAddRate || "0.00015");
+
+  // Derive taker/maker ratio from dailyUserVlm (~14 days of data)
+  const dailyUserVlm = userFeesData.dailyUserVlm as
+    | { userCross: string; userAdd: string }[]
+    | undefined;
+  let takerRatio = 0.7; // default
+  if (dailyUserVlm && dailyUserVlm.length > 0) {
+    let crossSum = 0;
+    let addSum = 0;
+    for (const d of dailyUserVlm) {
+      crossSum += Number(d.userCross || 0);
+      addSum += Number(d.userAdd || 0);
+    }
+    const total = crossSum + addSum;
+    if (total > 0) takerRatio = crossSum / total;
+  }
+
+  const takerVolume = totalVolume * takerRatio;
+  const makerVolume = totalVolume * (1 - takerRatio);
+  const totalHlFees = takerVolume * hlTakerRate + makerVolume * hlMakerRate;
+
+  // Estimate 30d volume for tier calculation (assume ~365 day history)
+  const estimated30dVol = totalVolume * (30 / 365);
 
   const binanceTier = getTier(BINANCE_TIERS, estimated30dVol);
   const binanceFees = takerVolume * binanceTier.taker + makerVolume * binanceTier.maker;
@@ -201,7 +162,7 @@ async function analyzeForOG(address: string): Promise<OGData | null> {
   return {
     totalFeesPaid: Math.round(totalHlFees * 100) / 100,
     totalVolume: Math.round(totalVolume * 100) / 100,
-    totalTrades: fills.length,
+    totalTrades: 0,
     lighter: {
       totalFees: 0,
       takerRate: 0,
