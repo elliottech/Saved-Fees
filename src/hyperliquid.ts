@@ -45,16 +45,19 @@ export async function fetchAllFills(
   const seenTids = new Set(allFills.map((f) => f.tid).filter(Boolean));
   let truncated = false;
 
-  // Step 2: paginate backwards if we got a full page
+  // Step 2: if there may be older fills, page forward from the beginning
   if (fills.length >= PAGE_SIZE) {
-    let earliestTime = Math.min(...fills.map((f) => Number(f.time)));
+    const earliestRecent = Math.min(...fills.map((f) => Number(f.time)));
+
+    let startTime = 0;
+    const endTime = earliestRecent - 1;
 
     while (allFills.length < MAX_FILLS) {
       const page = (await postHL({
         type: "userFillsByTime",
         user: address,
-        startTime: 0,
-        endTime: earliestTime - 1,
+        startTime,
+        endTime,
       })) as Fill[];
 
       if (!page || page.length === 0) break;
@@ -70,7 +73,10 @@ export async function fetchAllFills(
       onProgress?.(allFills.length);
 
       if (page.length < PAGE_SIZE) break;
-      earliestTime = Math.min(...newFills.map((f) => Number(f.time)));
+
+      // API returns oldest 2000 — advance past the latest we received
+      const latestReturned = Math.max(...page.map((f) => Number(f.time)));
+      startTime = latestReturned + 1;
     }
 
     if (allFills.length >= MAX_FILLS) {
