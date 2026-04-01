@@ -517,6 +517,8 @@ input[type="range"] {
 
 .overview-exch {
     padding: 0;
+    min-width: 0;
+    overflow: hidden;
 }
 .overview-grid > .overview-exch:not(:last-of-type) {
     border-right: 1px solid var(--border);
@@ -532,11 +534,14 @@ input[type="range"] {
 }
 
 .overview-exch-fees {
-    font-size: 1.2rem;
+    font-size: clamp(0.85rem, 2.5vw, 1.1rem);
     font-weight: 700;
     font-variant-numeric: tabular-nums;
     color: var(--text);
     margin-bottom: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .overview-exch-rates {
