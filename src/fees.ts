@@ -301,6 +301,137 @@ const WINDOW_MS: Record<string, number> = {
   "1yr": 365 * 24 * 60 * 60 * 1000,
 };
 
+export { WINDOW_MS };
+
+/**
+ * Produce an instant estimated AnalyzeResult using only userFees + portfolio
+ * (no fills required). This lets us show numbers in <200ms while fills load.
+ */
+export function estimateFromUserFees(
+  userFeesData: Record<string, unknown>,
+  portfolioData: unknown[],
+  address: string,
+  window: string
+): AnalyzeResult | null {
+  const hlTakerRate = Number(userFeesData.userCrossRate || "0.00045");
+  const hlMakerRate = Number(userFeesData.userAddRate || "0.00015");
+
+  // Derive taker/maker ratio from dailyUserVlm (covers ~14 days)
+  const dailyUserVlm = userFeesData.dailyUserVlm as
+    | { userCross: string; userAdd: string }[]
+    | undefined;
+  let takerRatio = 0.7; // default assumption
+  if (dailyUserVlm && dailyUserVlm.length > 0) {
+    let crossSum = 0;
+    let addSum = 0;
+    for (const d of dailyUserVlm) {
+      crossSum += Number(d.userCross || 0);
+      addSum += Number(d.userAdd || 0);
+    }
+    const total = crossSum + addSum;
+    if (total > 0) takerRatio = crossSum / total;
+  }
+
+  // Get total volume from portfolio for the selected window
+  const totalVolume = extractPortfolioVolume(portfolioData, window);
+  if (totalVolume === null || totalVolume <= 0) return null;
+
+  const takerVolume = totalVolume * takerRatio;
+  const makerVolume = totalVolume * (1 - takerRatio);
+
+  // Staking info
+  const stakingInfo = userFeesData.activeStakingDiscount as Record<string, unknown> | null;
+  let stakingDiscount = 0;
+  let stakingTier = "None";
+  if (stakingInfo?.discount) {
+    stakingDiscount = Number(stakingInfo.discount);
+    for (const st of [...HL_STAKING_TIERS].reverse()) {
+      if (Math.abs(stakingDiscount - st.discount) < 0.001) {
+        stakingTier = st.name;
+        break;
+      }
+    }
+  }
+  const referralDiscount = Number(userFeesData.activeReferralDiscount || "0");
+
+  const totalHlFees = takerVolume * hlTakerRate + makerVolume * hlMakerRate;
+
+  // Volume tiers
+  const requestedDays = WINDOW_TO_DAYS[window] ?? 365;
+  const estimated14dVol = requestedDays > 14 ? totalVolume * (14 / requestedDays) : totalVolume;
+  const estimated30dVol = requestedDays > 30 ? totalVolume * (30 / requestedDays) : totalVolume;
+  const hlTier = getTier(HL_PERP_TIERS, estimated14dVol);
+
+  const binanceTier = getTier(BINANCE_TIERS, estimated30dVol);
+  const binanceFees = takerVolume * binanceTier.taker + makerVolume * binanceTier.maker;
+  const binanceFeesBnb = binanceFees * 0.9;
+
+  const bybitTier = getTier(BYBIT_TIERS, estimated30dVol);
+  const bybitFees = takerVolume * bybitTier.taker + makerVolume * bybitTier.maker;
+
+  return {
+    address,
+    mode: "estimate",
+    window,
+    summary: {
+      total_volume: Math.round(totalVolume * 100) / 100,
+      total_trades: 0,
+      taker_volume: Math.round(takerVolume * 100) / 100,
+      maker_volume: Math.round(makerVolume * 100) / 100,
+      maker_ratio: Math.round((1 - takerRatio) * 10000) / 10000,
+      taker_ratio: Math.round(takerRatio * 10000) / 10000,
+      period_start: 0,
+      period_end: Date.now(),
+      trading_days: requestedDays,
+    },
+    hyperliquid: {
+      total_fees_paid: Math.round(totalHlFees * 100) / 100,
+      contains_estimated_history: true,
+      effective_taker_rate: hlTakerRate,
+      effective_maker_rate: hlMakerRate,
+      tier: hlTier.name,
+      staking_tier: stakingTier,
+      staking_discount: stakingDiscount,
+      referral_discount: referralDiscount,
+    },
+    history_notice: {
+      estimated: true,
+      message: "Estimated from aggregated volume data. Exact numbers loading...",
+    },
+    comparisons: {
+      lighter: {
+        name: "Lighter",
+        color: "#4a7aff",
+        total_fees: 0,
+        tier: "Zero Fees",
+        taker_rate: 0,
+        maker_rate: 0,
+        savings_vs_hl: Math.round(totalHlFees * 100) / 100,
+      },
+      binance: {
+        name: "Binance",
+        color: "#f0b90b",
+        total_fees: Math.round(binanceFees * 100) / 100,
+        total_fees_bnb: Math.round(binanceFeesBnb * 100) / 100,
+        tier: binanceTier.name,
+        taker_rate: binanceTier.taker,
+        maker_rate: binanceTier.maker,
+        diff_vs_hl: Math.round((totalHlFees - binanceFees) * 100) / 100,
+      },
+      bybit: {
+        name: "Bybit",
+        color: "#f7a600",
+        total_fees: Math.round(bybitFees * 100) / 100,
+        tier: bybitTier.name,
+        taker_rate: bybitTier.taker,
+        maker_rate: bybitTier.maker,
+        diff_vs_hl: Math.round((totalHlFees - bybitFees) * 100) / 100,
+      },
+    },
+    top_coins: [],
+  };
+}
+
 export function filterFillsByWindow(fills: Fill[], window: string): Fill[] {
   if (window === "all" || fills.length === 0) return fills;
   const ms = WINDOW_MS[window];
@@ -481,6 +612,18 @@ export function analyzeFees(
     }
   }
 
+  // Portfolio floor: never show less volume/fees than what portfolio data reports.
+  // This handles the case where fills are incomplete (e.g. 500M fetched out of 30B
+  // actual volume) — we use portfolio volume as the floor and scale fees up.
+  if (portfolioVolume !== null && portfolioVolume > totalVolume && totalVolume > 0) {
+    const scaleFactor = portfolioVolume / totalVolume;
+    totalVolume = portfolioVolume;
+    takerVolume *= scaleFactor;
+    makerVolume *= scaleFactor;
+    totalHlFees *= scaleFactor;
+    historyEstimated = true;
+  }
+
   makerRatio = totalVolume > 0 ? makerVolume / totalVolume : 0;
   takerRatio = totalVolume > 0 ? takerVolume / totalVolume : 0;
 
@@ -544,8 +687,8 @@ export function analyzeFees(
       ? {
           estimated: true,
           message:
-            "Part of this address's trading history could not be fetched from the Hyperliquid API. " +
-            "The remaining fees were estimated from the observed maker/taker activity in the fetched history.",
+            "Complete trade history exceeds what the Hyperliquid API can return. " +
+            "Volume and fees are based on portfolio data; trade count reflects fetched trades only.",
         }
       : null,
     comparisons: {

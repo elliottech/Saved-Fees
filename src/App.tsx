@@ -3,10 +3,13 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
   analyzeFees,
+  estimateFromUserFees,
   simulateFees,
   filterFillsByWindow,
+  WINDOW_MS,
   type AnalyzeResult,
   type ExchangeComparison,
+  type FillsData,
 } from "./fees";
 import {
   fetchUserFees,
@@ -14,6 +17,22 @@ import {
   fetchSpotMeta,
   fetchAllFills,
 } from "./hyperliquid";
+
+/** Cached API data so window switches don't re-fetch. */
+interface CachedData {
+  address: string;
+  /** The window used when fills were fetched ("all" means full history). */
+  fetchedWindow: string;
+  userFeesData: Record<string, unknown>;
+  portfolioData: unknown[];
+  fillsData: FillsData;
+  spotMeta: Record<string, unknown>;
+}
+
+/** Window ordering for cache validity — wider windows need more data. */
+const WINDOW_ORDER: Record<string, number> = {
+  "7d": 1, "30d": 2, "90d": 3, "1yr": 4, all: 5,
+};
 
 // ── Formatting helpers ─────────────────────────────────────────────────────
 function formatUSDFull(val: number | null | undefined): string {
@@ -461,6 +480,7 @@ export default function App() {
   const [openShareMenu, setOpenShareMenu] = useState<string | null>(null);
   const [shareToast, setShareToast] = useState<string | null>(null);
   const shareToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cachedDataRef = useRef<CachedData | null>(null);
 
   // Apply theme
   useEffect(() => {
@@ -517,20 +537,82 @@ export default function App() {
         return;
       }
       setHint(null);
+      setCurrentMode("analyze");
+
+      // If we already have cached data for this address AND the cached fills
+      // cover the requested window, re-filter locally (instant).
+      const cached = cachedDataRef.current;
+      const cachedOrder = cached ? (WINDOW_ORDER[cached.fetchedWindow] ?? 0) : 0;
+      const requestedOrder = WINDOW_ORDER[targetWindow] ?? 0;
+      if (cached && cached.address === targetAddress && cachedOrder >= requestedOrder) {
+        const filteredFills = filterFillsByWindow(cached.fillsData.fills, targetWindow);
+        const filteredFillsData = { ...cached.fillsData, fills: filteredFills };
+        const result = analyzeFees(
+          cached.userFeesData,
+          cached.portfolioData,
+          filteredFillsData,
+          cached.spotMeta,
+          targetAddress,
+          targetWindow
+        );
+        result.window = targetWindow;
+        setData(result);
+
+        const url = new URL(window.location.href);
+        url.searchParams.set("address", targetAddress);
+        url.searchParams.set("window", targetWindow);
+        url.searchParams.delete("mode");
+        window.history.replaceState(null, "", url.toString());
+        return;
+      }
+
       setLoading(true);
       setLoadingText("fetching trades...");
       setLoadingSub("this may take a moment for active traders");
-      setCurrentMode("analyze");
 
       try {
-        const [userFeesData, portfolioData, fillsData, spotMeta] = await Promise.all([
+        // Phase 1: Show instant estimate from lightweight endpoints
+        const [userFeesData, portfolioData] = await Promise.all([
           fetchUserFees(targetAddress),
           fetchPortfolio(targetAddress),
-          fetchAllFills(targetAddress, (count) => {
-            setLoadingText(`fetched ${count.toLocaleString()} trades...`);
+        ]);
+
+        const estimate = estimateFromUserFees(
+          userFeesData,
+          portfolioData,
+          targetAddress,
+          targetWindow
+        );
+        if (estimate) {
+          estimate.window = targetWindow;
+          setData(estimate);
+          setLoading(false);
+          setLoadingSub("refining with exact trade data...");
+        }
+
+        // Phase 2: Fetch fills (time-windowed for non-"all" windows)
+        const windowMs = WINDOW_MS[targetWindow];
+        const fillStartTime = windowMs ? Date.now() - windowMs : undefined;
+
+        const [fillsData, spotMeta] = await Promise.all([
+          fetchAllFills(targetAddress, {
+            onProgress: (count) => {
+              setLoadingText(`fetched ${count.toLocaleString()} trades...`);
+            },
+            startTime: fillStartTime,
           }),
           fetchSpotMeta(),
         ]);
+
+        // Cache the fetched data for fast window switching
+        cachedDataRef.current = {
+          address: targetAddress,
+          fetchedWindow: targetWindow,
+          userFeesData,
+          portfolioData,
+          fillsData,
+          spotMeta,
+        };
 
         const filteredFills = filterFillsByWindow(fillsData.fills, targetWindow);
         const filteredFillsData = { ...fillsData, fills: filteredFills };
@@ -614,6 +696,7 @@ export default function App() {
             }
           }, 0);
         } else {
+          // Use cached data for instant window switching (runAnalyze checks cache first)
           runAnalyze(undefined, newWindow);
         }
       }
