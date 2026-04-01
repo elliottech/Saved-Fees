@@ -21,11 +21,18 @@ import {
 /** Cached API data so window switches don't re-fetch. */
 interface CachedData {
   address: string;
+  /** The window used when fills were fetched ("all" means full history). */
+  fetchedWindow: string;
   userFeesData: Record<string, unknown>;
   portfolioData: unknown[];
   fillsData: FillsData;
   spotMeta: Record<string, unknown>;
 }
+
+/** Window ordering for cache validity — wider windows need more data. */
+const WINDOW_ORDER: Record<string, number> = {
+  "7d": 1, "30d": 2, "90d": 3, "1yr": 4, all: 5,
+};
 
 // ── Formatting helpers ─────────────────────────────────────────────────────
 function formatUSDFull(val: number | null | undefined): string {
@@ -532,9 +539,12 @@ export default function App() {
       setHint(null);
       setCurrentMode("analyze");
 
-      // If we already have cached data for this address, re-filter locally
+      // If we already have cached data for this address AND the cached fills
+      // cover the requested window, re-filter locally (instant).
       const cached = cachedDataRef.current;
-      if (cached && cached.address === targetAddress) {
+      const cachedOrder = cached ? (WINDOW_ORDER[cached.fetchedWindow] ?? 0) : 0;
+      const requestedOrder = WINDOW_ORDER[targetWindow] ?? 0;
+      if (cached && cached.address === targetAddress && cachedOrder >= requestedOrder) {
         const filteredFills = filterFillsByWindow(cached.fillsData.fills, targetWindow);
         const filteredFillsData = { ...cached.fillsData, fills: filteredFills };
         const result = analyzeFees(
@@ -597,6 +607,7 @@ export default function App() {
         // Cache the fetched data for fast window switching
         cachedDataRef.current = {
           address: targetAddress,
+          fetchedWindow: targetWindow,
           userFeesData,
           portfolioData,
           fillsData,
