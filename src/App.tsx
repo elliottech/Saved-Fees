@@ -926,8 +926,9 @@ export default function App() {
                       {formatUSDFull(exch.data.total_fees)}
                     </div>
                     <div className="overview-exch-rates">
-                      taker: {formatBps(exch.data.taker_rate)} &middot; maker:{" "}
-                      {formatBps(exch.data.maker_rate)}
+                      taker: {formatBps(exch.data.taker_rate)}
+                      <br />
+                      maker: {formatBps(exch.data.maker_rate)}
                     </div>
                     <ExchDiffDisplay exch={exch.data} exchKey={exch.key} />
                   </div>

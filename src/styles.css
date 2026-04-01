@@ -500,7 +500,6 @@ input[type="range"] {
 .overview-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    column-gap: 32px;
     border-top: 1px solid var(--border);
     padding-top: 20px;
 }
@@ -517,10 +516,15 @@ input[type="range"] {
 
 .overview-exch {
     padding: 0;
+    min-width: 0;
+    overflow: hidden;
 }
 .overview-grid > .overview-exch:not(:last-of-type) {
     border-right: 1px solid var(--border);
-    padding-right: 32px;
+    padding-right: 16px;
+}
+.overview-grid > .overview-exch:not(:first-of-type) {
+    padding-left: 16px;
 }
 
 .overview-exch-name {
@@ -532,18 +536,20 @@ input[type="range"] {
 }
 
 .overview-exch-fees {
-    font-size: 1.2rem;
+    font-size: clamp(0.85rem, 2.5vw, 1.2rem);
     font-weight: 700;
     font-variant-numeric: tabular-nums;
     color: var(--text);
     margin-bottom: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .overview-exch-rates {
     font-size: 0.62rem;
     color: var(--text-muted);
     margin-bottom: 10px;
-    white-space: nowrap;
 }
 
 .overview-exch-diff {
