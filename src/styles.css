@@ -550,7 +550,6 @@ input[type="range"] {
     font-size: 0.62rem;
     color: var(--text-muted);
     margin-bottom: 10px;
-    white-space: nowrap;
 }
 
 .overview-exch-diff {
