@@ -375,6 +375,37 @@ function OGImage({ data }: { data: OGData }) {
   );
 }
 
+/* ── In-memory cache ─────────────────────────────────────────────────────── */
+
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const CACHE_MAX_ENTRIES = 500;
+
+interface CacheEntry {
+  data: OGData;
+  timestamp: number;
+}
+
+const ogCache = new Map<string, CacheEntry>();
+
+function getCached(address: string): OGData | null {
+  const entry = ogCache.get(address);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+    ogCache.delete(address);
+    return null;
+  }
+  return entry.data;
+}
+
+function setCache(address: string, data: OGData): void {
+  // Evict oldest entries if at capacity
+  if (ogCache.size >= CACHE_MAX_ENTRIES) {
+    const oldest = ogCache.keys().next().value;
+    if (oldest !== undefined) ogCache.delete(oldest);
+  }
+  ogCache.set(address, { data, timestamp: Date.now() });
+}
+
 /* ── Route handler ───────────────────────────────────────────────────────── */
 
 export async function GET(request: NextRequest) {
@@ -384,11 +415,17 @@ export async function GET(request: NextRequest) {
   let data: OGData;
 
   if (address && ADDRESS_RE.test(address)) {
-    try {
-      const result = await analyzeForOG(address);
-      data = result ?? defaultOGData();
-    } catch {
-      data = defaultOGData();
+    const cached = getCached(address);
+    if (cached) {
+      data = cached;
+    } else {
+      try {
+        const result = await analyzeForOG(address);
+        data = result ?? defaultOGData();
+        if (result) setCache(address, data);
+      } catch {
+        data = defaultOGData();
+      }
     }
   } else {
     data = defaultOGData();
@@ -398,7 +435,7 @@ export async function GET(request: NextRequest) {
     width: 1200,
     height: 630,
     headers: {
-      "Cache-Control": "public, max-age=3600, s-maxage=3600",
+      "Cache-Control": "public, max-age=3600, s-maxage=86400",
     },
   });
 }
