@@ -612,6 +612,18 @@ export function analyzeFees(
     }
   }
 
+  // Portfolio floor: never show less volume/fees than what portfolio data reports.
+  // This handles the case where fills are incomplete (e.g. 500M fetched out of 30B
+  // actual volume) — we use portfolio volume as the floor and scale fees up.
+  if (portfolioVolume !== null && portfolioVolume > totalVolume && totalVolume > 0) {
+    const scaleFactor = portfolioVolume / totalVolume;
+    totalVolume = portfolioVolume;
+    takerVolume *= scaleFactor;
+    makerVolume *= scaleFactor;
+    totalHlFees *= scaleFactor;
+    historyEstimated = true;
+  }
+
   makerRatio = totalVolume > 0 ? makerVolume / totalVolume : 0;
   takerRatio = totalVolume > 0 ? takerVolume / totalVolume : 0;
 
@@ -675,8 +687,8 @@ export function analyzeFees(
       ? {
           estimated: true,
           message:
-            "Part of this address's trading history could not be fetched from the Hyperliquid API. " +
-            "The remaining fees were estimated from the observed maker/taker activity in the fetched history.",
+            "Complete trade history exceeds what the Hyperliquid API can return. " +
+            "Volume and fees are based on portfolio data; trade count reflects fetched trades only.",
         }
       : null,
     comparisons: {
