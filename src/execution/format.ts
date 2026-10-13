@@ -31,35 +31,67 @@ export const isDirection = (v: string): v is Direction => v in DIRECTIONS;
 export const isWindow = (v: string | undefined): v is WindowKey =>
   v === "7d" || v === "30d" || v === "90d" || v === "all";
 
+const ZERO = 0.005;
+
+const USD_UNITS: [number, string, number][] = [
+  [1e3, "K", 1],
+  [1e6, "M", 2],
+  [1e9, "B", 2],
+];
+
+function usdAbs(a: number): string {
+  if (a < 1e4) return `$${a.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  let i = a >= 1e9 ? 2 : a >= 1e6 ? 1 : 0;
+  for (;;) {
+    const [div, unit, digits] = USD_UNITS[i];
+    const scale = 10 ** digits;
+    const n = Math.round(a / (div / scale));
+    if (n >= 1000 * scale && i < USD_UNITS.length - 1) {
+      i++;
+      continue;
+    }
+    return `$${(n / scale).toFixed(digits)}${unit}`;
+  }
+}
+
 export function fmtUsd(v: number | null | undefined, signed = false): string {
-  if (v == null || Number.isNaN(v)) return "—";
-  const sign = v < 0 ? "−" : signed && v > 0 ? "+" : "";
-  const a = Math.abs(v);
-  if (a >= 1e9) return `${sign}$${(a / 1e9).toFixed(2)}B`;
-  if (a >= 1e6) return `${sign}$${(a / 1e6).toFixed(2)}M`;
-  if (a >= 1e4) return `${sign}$${(a / 1e3).toFixed(1)}K`;
-  return `${sign}$${a.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (v == null || !Number.isFinite(v)) return "—";
+  if (Math.abs(v) < ZERO) return "$0.00";
+  const sign = v < 0 ? "−" : signed ? "+" : "";
+  return `${sign}${usdAbs(Math.abs(v))}`;
 }
 
 export function fmtBps(v: number | null | undefined, signed = true): string {
-  if (v == null || Number.isNaN(v)) return "—";
-  const sign = v < 0 ? "−" : signed && v > 0 ? "+" : "";
+  if (v == null || !Number.isFinite(v)) return "—";
+  if (Math.abs(v) < ZERO) return "0.00 bps";
+  const sign = v < 0 ? "−" : signed ? "+" : "";
   return `${sign}${Math.abs(v).toFixed(2)} bps`;
 }
 
-export const fmtInt = (v: number | null | undefined) => (v == null ? "—" : v.toLocaleString("en-US"));
+export const fmtInt = (v: number | null | undefined) =>
+  v == null || !Number.isFinite(v) ? "—" : v.toLocaleString("en-US");
 
 export function fmtPx(v: number | null | undefined): string {
-  if (v == null) return "—";
+  if (v == null || !Number.isFinite(v)) return "—";
   const a = Math.abs(v);
-  const digits = a >= 1000 ? 2 : a >= 1 ? 4 : 6;
-  return v.toLocaleString("en-US", { maximumFractionDigits: digits, minimumFractionDigits: 0 });
+  if (a > 0 && a < 1) return v.toLocaleString("en-US", { maximumSignificantDigits: 5 });
+  return v.toLocaleString("en-US", { maximumFractionDigits: a >= 1000 ? 2 : 4, minimumFractionDigits: 0 });
 }
 
 export const shortAddr = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 
 export const signClass = (v: number | null | undefined) =>
-  v == null || v === 0 ? "" : v > 0 ? "ex-pos" : "ex-neg";
+  v == null || !Number.isFinite(v) || Math.abs(v) < ZERO ? "" : v > 0 ? "ex-pos" : "ex-neg";
+
+/** Hero / share-card phrase for a wallet's total in a direction (positive = cheaper on Lighter). */
+export function outcomeText(direction: Direction, totalUsd: number): string {
+  const better = totalUsd > -ZERO;
+  if (direction === "hl_to_lighter") return better ? "would have saved on Lighter" : "would have paid more on Lighter";
+  return better ? "saved by trading on Lighter (vs Hyperliquid)" : "would have paid less on Hyperliquid";
+}
+
+/** Same rule as the producer's coin_slug (Python str.replace replaces every ':'). */
+export const coinSlug = (coin: string) => coin.split(":").join("_");
 
 export const fmtTime = (ms: number) => new Date(ms).toISOString().replace("T", " ").slice(0, 19) + " UTC";
 

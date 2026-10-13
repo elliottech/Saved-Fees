@@ -85,6 +85,7 @@ export function LeaderboardTable({
   publicTags: Record<string, string>;
   showTopCoin?: boolean;
 }) {
+  if (!rows.length) return <p className="ex-muted">No wallets in this view.</p>;
   return (
     <div className="ex-table-wrap">
       <table className="ex-table">
@@ -92,10 +93,10 @@ export function LeaderboardTable({
           <tr>
             <th>#</th>
             <th>wallet</th>
-            <th className="num">saved</th>
+            <th className="num" title="fee difference + price difference; positive = cheaper on Lighter">saved</th>
             <th className="num">bps</th>
-            <th className="num ex-hide-sm">fees</th>
-            <th className="num ex-hide-sm">price</th>
+            <th className="num ex-hide-sm" title="Hyperliquid fee − Lighter fee">fees</th>
+            <th className="num ex-hide-sm" title="cost on Hyperliquid's book − cost on Lighter's">price</th>
             <th className="num ex-hide-sm">volume</th>
             {showTopCoin && <th className="ex-hide-sm">top coin</th>}
           </tr>
@@ -187,12 +188,12 @@ export function Pager({ page, pages, href }: { page: number; pages: number; href
     .filter((p) => p >= 1 && p <= pages)
     .sort((a, b) => a - b);
   return (
-    <nav className="ex-pager">
+    <nav className="ex-pager" aria-label="pagination">
       {page > 1 && <Link href={href(page - 1)}>← prev</Link>}
       {nums.map((p, i) => (
         <span key={p}>
           {i > 0 && nums[i - 1] !== p - 1 && <span className="ex-muted">…</span>}
-          {p === page ? <b>{p}</b> : <Link href={href(p)}>{p}</Link>}
+          {p === page ? <b aria-current="page">{p}</b> : <Link href={href(p)}>{p}</Link>}
         </span>
       ))}
       {page < pages && <Link href={href(page + 1)}>next →</Link>}

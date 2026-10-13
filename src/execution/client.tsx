@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 
@@ -39,29 +39,32 @@ export function ThemeToggle() {
 export function WalletSearch({ autoFocus = false }: { autoFocus?: boolean }) {
   const router = useRouter();
   const [q, setQ] = useState("");
-  const [hits, setHits] = useState<{ name: string; address: string }[]>([]);
+  const [result, setResult] = useState<{ term: string; hits: { name: string; address: string }[] }>({
+    term: "",
+    hits: [],
+  });
   const [error, setError] = useState("");
-  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const term = q.trim();
+  const hits = result.term === term ? result.hits : [];
 
   useEffect(() => {
-    clearTimeout(timer.current);
-    const term = q.trim();
-    if (term.length < 2 || term.startsWith("0x")) {
-      setHits([]);
-      return;
-    }
-    timer.current = setTimeout(async () => {
+    if (term.length < 2 || term.startsWith("0x")) return;
+    const ctrl = new AbortController();
+    const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/execution/search?q=${encodeURIComponent(term)}`);
-        setHits(res.ok ? await res.json() : []);
+        const res = await fetch(`/api/execution/search?q=${encodeURIComponent(term)}`, { signal: ctrl.signal });
+        setResult({ term, hits: res.ok ? await res.json() : [] });
       } catch {
-        setHits([]);
+        if (!ctrl.signal.aborted) setResult({ term, hits: [] });
       }
     }, 200);
-  }, [q]);
+    return () => {
+      clearTimeout(timer);
+      ctrl.abort();
+    };
+  }, [term]);
 
   const go = () => {
-    const term = q.trim();
     if (ADDRESS_RE.test(term)) {
       router.push(`/wallet/${term.toLowerCase()}`);
     } else if (hits.length) {
@@ -78,6 +81,7 @@ export function WalletSearch({ autoFocus = false }: { autoFocus?: boolean }) {
           id="address-input"
           type="text"
           placeholder="0x… address or name"
+          aria-label="Wallet address or public name"
           spellCheck={false}
           autoComplete="off"
           autoFocus={autoFocus}

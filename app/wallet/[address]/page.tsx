@@ -1,23 +1,25 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { notFound, permanentRedirect } from "next/navigation";
 import { CopyLink, WalletSearch } from "@/execution/client";
 import { DailyChart, Section, Shell, Stat, Tags } from "@/execution/components";
 import { ADDRESS_RE, getMeta, getWallet } from "@/execution/data";
+import { SITE_URL } from "@/execution/layout";
 import {
   DIRECTIONS,
   WINDOW_LABELS,
+  coinSlug,
   fmtBps,
   fmtInt,
   fmtPx,
   fmtTime,
   fmtUsd,
   isWindow,
+  outcomeText,
   shortAddr,
   signClass,
 } from "@/execution/format";
 import type { Direction, WalletDirection, WalletOrder, WindowKey } from "@/execution/types";
-
-export const revalidate = 300;
 
 interface Props {
   params: { address: string };
@@ -28,7 +30,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const address = params.address.toLowerCase();
   if (!ADDRESS_RE.test(address)) return { title: "Wallet | tradingfees.wtf" };
   const wallet = await getWallet(address);
-  const who = wallet?.name ?? shortAddr(address);
+  if (!wallet) return { title: `${shortAddr(address)} | tradingfees.wtf`, robots: { index: false } };
+  const who = wallet.name ?? shortAddr(address);
   const og = `/api/execution/og?address=${address}`;
   return {
     title: `${who} — execution cost | tradingfees.wtf`,
@@ -50,9 +53,9 @@ function OrdersTable({ orders, info }: { orders: WalletOrder[]; info: (typeof DI
             <th className="num">size</th>
             <th className="num ex-hide-sm">HL price</th>
             <th className="num ex-hide-sm">Lighter price</th>
-            <th className="num ex-hide-sm">fees</th>
-            <th className="num ex-hide-sm">price</th>
-            <th className="num">saved</th>
+            <th className="num ex-hide-sm" title="Hyperliquid fee − Lighter fee">fees</th>
+            <th className="num ex-hide-sm" title="cost on Hyperliquid's book − cost on Lighter's">price</th>
+            <th className="num" title="fee difference + price difference; positive = cheaper on Lighter">saved</th>
           </tr>
         </thead>
         <tbody>
@@ -123,12 +126,14 @@ function DirectionPanel({
       >
         <div className="overview-hero">
           <div className="overview-label">
-            {w.total_usd >= 0 ? `would have saved on ${info.target}` : `would have paid more on ${info.target}`}
+            {outcomeText(direction, w.total_usd)}
           </div>
           <div className={`overview-amount ${signClass(w.total_usd)}`}>{fmtUsd(Math.abs(w.total_usd))}</div>
           <div className="overview-sub">
             {fmtBps(w.total_bps)} on {fmtUsd(w.replayed_notional)} of taker volume · rank{" "}
-            <Link href={`/execution/${direction}?window=${win}&show=all&page=${Math.ceil(w.rank / 100)}`}>
+            <Link
+              href={`/execution/${direction}?${new URLSearchParams({ window: win, show: "all", page: String(Math.ceil(w.rank / 100)) })}`}
+            >
               #{fmtInt(w.rank)}
             </Link>{" "}
             of {fmtInt(w.of)}
@@ -152,10 +157,10 @@ function DirectionPanel({
             <thead>
               <tr>
                 <th>coin</th>
-                <th className="num">saved</th>
+                <th className="num" title="fee difference + price difference; positive = cheaper on Lighter">saved</th>
                 <th className="num">bps</th>
-                <th className="num ex-hide-sm">fees</th>
-                <th className="num ex-hide-sm">price</th>
+                <th className="num ex-hide-sm" title="Hyperliquid fee − Lighter fee">fees</th>
+                <th className="num ex-hide-sm" title="cost on Hyperliquid's book − cost on Lighter's">price</th>
                 <th className="num">volume</th>
                 <th className="num ex-hide-sm">orders</th>
                 <th className="num ex-hide-sm">coin rank</th>
@@ -165,7 +170,9 @@ function DirectionPanel({
               {coins.map((c) => (
                 <tr key={c.coin}>
                   <td>
-                    <Link href={`/execution/${direction}?window=${win}&coin=${c.coin.replace(":", "_")}`}>{c.coin}</Link>
+                    <Link href={`/execution/${direction}?${new URLSearchParams({ window: win, coin: coinSlug(c.coin) })}`}>
+                      {c.coin}
+                    </Link>
                   </td>
                   <td className={`num ${signClass(c.total_usd)}`}>{fmtUsd(c.total_usd, true)}</td>
                   <td className={`num ${signClass(c.total_bps)}`}>{fmtBps(c.total_bps)}</td>
@@ -199,8 +206,13 @@ function DirectionPanel({
 
 export default async function WalletPage({ params, searchParams }: Props) {
   const address = params.address.toLowerCase();
+  if (!ADDRESS_RE.test(address)) notFound();
+  if (address !== params.address) {
+    const qs = searchParams.window ? `?${new URLSearchParams({ window: searchParams.window })}` : "";
+    permanentRedirect(`/wallet/${address}${qs}`);
+  }
   const window: WindowKey = isWindow(searchParams.window) ? searchParams.window : "30d";
-  const [meta, wallet] = await Promise.all([getMeta(), ADDRESS_RE.test(address) ? getWallet(address) : null]);
+  const [meta, wallet] = await Promise.all([getMeta(), getWallet(address)]);
 
   if (!wallet) {
     return (
@@ -209,11 +221,7 @@ export default async function WalletPage({ params, searchParams }: Props) {
           <WalletSearch />
         </section>
         <Section label="wallet not found">
-          <p className="ex-lead">
-            {ADDRESS_RE.test(address)
-              ? `${shortAddr(address)} has no replayed taker orders in the stored days.`
-              : "That isn't a valid 0x address."}
-          </p>
+          <p className="ex-lead">{`${shortAddr(address)} has no replayed taker orders in the stored days.`}</p>
           <p className="ex-muted ex-small">
             Only taker orders in coins listed on both venues are replayed; wallets that only provide liquidity
             don't appear.
@@ -238,7 +246,7 @@ export default async function WalletPage({ params, searchParams }: Props) {
             className="action-btn ex-small-btn"
             target="_blank"
             rel="noreferrer"
-            href={`https://x.com/intent/tweet?url=${encodeURIComponent(`https://tradingfees.wtf/wallet/${wallet.address}`)}`}
+            href={`https://x.com/intent/tweet?url=${encodeURIComponent(`${SITE_URL}/wallet/${wallet.address}`)}`}
           >
             share on X
           </a>

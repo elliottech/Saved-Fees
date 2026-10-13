@@ -4,10 +4,18 @@ import { notFound } from "next/navigation";
 import { NavSelect, WalletSearch } from "@/execution/client";
 import { LeaderboardTable, Pager, Section, Shell, Stat } from "@/execution/components";
 import { getCoins, getLeaderboard, getMeta } from "@/execution/data";
-import { DIRECTIONS, WINDOW_LABELS, fmtBps, fmtInt, fmtUsd, isDirection, isWindow, signClass } from "@/execution/format";
+import {
+  DIRECTIONS,
+  WINDOW_LABELS,
+  fmtBps,
+  fmtInt,
+  fmtUsd,
+  isDirection,
+  isWindow,
+  outcomeText,
+  signClass,
+} from "@/execution/format";
 import type { Direction, WindowKey } from "@/execution/types";
-
-export const revalidate = 300;
 
 const VIEW_SIZE = 100;
 
@@ -44,7 +52,7 @@ export default async function Leaderboard({ params, searchParams }: Props) {
   const positive = coin ? coin.positive_wallets : w.positive_wallets;
   // Shown 100 at a time; the data files hold meta.page_size (1000) ranks each.
   const pages = Math.max(1, Math.ceil((showAll ? wallets : positive) / VIEW_SIZE));
-  const page = Math.min(pages, Math.max(1, Number(searchParams.page) || 1));
+  const page = Math.min(pages, Math.max(1, Math.floor(Number(searchParams.page)) || 1));
   const firstRank = (page - 1) * VIEW_SIZE + 1;
   const lb = await getLeaderboard(direction, window, scope, Math.ceil(firstRank / meta.page_size));
   const rows = (lb?.rows ?? []).filter(
@@ -121,7 +129,7 @@ export default async function Leaderboard({ params, searchParams }: Props) {
         <p className="ex-muted ex-small">
           {showAll
             ? `All ${fmtInt(wallets)} wallets, best to worst.`
-            : `The ${fmtInt(positive)} wallets that would have saved, best first.`}{" "}
+            : `The ${fmtInt(positive)} wallets that ${outcomeText(direction, 1)}, best first.`}{" "}
           Saved = fee difference + execution price difference.
         </p>
         <LeaderboardTable rows={rows} publicTags={meta.public_tags} showTopCoin={!coin} />

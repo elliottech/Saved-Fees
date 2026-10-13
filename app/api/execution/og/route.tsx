@@ -1,8 +1,17 @@
 import { ImageResponse } from "next/og";
 import { NextRequest } from "next/server";
 import { ADDRESS_RE, getMeta, getWallet } from "@/execution/data";
-import { DIRECTIONS, WINDOW_LABELS, fmtBps, fmtInt, fmtUsd, shortAddr } from "@/execution/format";
-import type { Direction, WindowKey } from "@/execution/types";
+import {
+  DIRECTIONS,
+  WINDOW_LABELS,
+  fmtBps,
+  fmtInt,
+  fmtUsd,
+  outcomeText,
+  shortAddr,
+  signClass,
+} from "@/execution/format";
+import type { Direction, Wallet, WindowKey, WindowSummary } from "@/execution/types";
 
 export const runtime = "nodejs";
 
@@ -45,31 +54,41 @@ function pickWindow(windows: Partial<Record<WindowKey, { total_usd: number }>>):
   return order.find((k) => (windows[k]?.total_usd ?? 0) > 0) ?? order.find((k) => windows[k]) ?? null;
 }
 
+function defaultCard(w: WindowSummary | undefined) {
+  return (
+    <Frame>
+      <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+        <div style={{ fontSize: 34, color: MUTED }}>Hyperliquid traders, last 30 days</div>
+        <div style={{ fontSize: 92, color: GREEN }}>
+          {w ? `${fmtUsd(w.positive_total_usd)} saveable` : "Execution leaderboards"}
+        </div>
+        <div style={{ fontSize: 34, color: TEXT }}>
+          {w ? `${fmtInt(w.positive_wallets)} wallets would have paid less on Lighter` : ""}
+        </div>
+      </div>
+    </Frame>
+  );
+}
+
+const cacheFor = (seconds: number) => ({ "cache-control": `public, max-age=${seconds}` });
+
 export async function GET(req: NextRequest) {
   const address = (req.nextUrl.searchParams.get("address") ?? "").toLowerCase();
 
   if (!ADDRESS_RE.test(address)) {
-    const meta = await getMeta();
-    const w = meta.directions.hl_to_lighter?.windows["30d"];
-    return new ImageResponse(
-      (
-        <Frame>
-          <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-            <div style={{ fontSize: 34, color: MUTED }}>Hyperliquid traders, last 30 days</div>
-            <div style={{ fontSize: 92, fontWeight: 800, color: GREEN }}>
-              {w ? `${fmtUsd(w.positive_total_usd)} saveable` : "Execution leaderboards"}
-            </div>
-            <div style={{ fontSize: 34, color: TEXT }}>
-              {w ? `${fmtInt(w.positive_wallets)} wallets would have paid less on Lighter` : ""}
-            </div>
-          </div>
-        </Frame>
-      ),
-      SIZE,
-    );
+    let w: WindowSummary | undefined;
+    try {
+      w = (await getMeta()).directions.hl_to_lighter?.windows["30d"];
+    } catch {}
+    return new ImageResponse(defaultCard(w), { ...SIZE, headers: cacheFor(w ? 3600 : 60) });
   }
 
-  const wallet = await getWallet(address);
+  let wallet: Wallet | null;
+  try {
+    wallet = await getWallet(address);
+  } catch {
+    return new ImageResponse(defaultCard(undefined), { ...SIZE, headers: cacheFor(60) });
+  }
   const direction = (Object.keys(DIRECTIONS) as Direction[]).find((d) => wallet?.directions[d]);
   const data = direction ? wallet?.directions[direction] : undefined;
   const win = data ? pickWindow(data.windows) : null;
@@ -84,9 +103,9 @@ export async function GET(req: NextRequest) {
           {w && direction && win ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
               <div style={{ fontSize: 34, color: MUTED }}>
-                {`${w.total_usd >= 0 ? "would have saved" : "would have paid more"} on ${DIRECTIONS[direction].target} · ${WINDOW_LABELS[win].toLowerCase()}`}
+                {`${outcomeText(direction, w.total_usd)} · ${WINDOW_LABELS[win].toLowerCase()}`}
               </div>
-              <div style={{ fontSize: 120, fontWeight: 800, color: w.total_usd >= 0 ? GREEN : RED }}>
+              <div style={{ fontSize: 120, color: signClass(w.total_usd) === "ex-neg" ? RED : GREEN }}>
                 {fmtUsd(Math.abs(w.total_usd))}
               </div>
               <div style={{ fontSize: 32, color: TEXT }}>
@@ -99,6 +118,6 @@ export async function GET(req: NextRequest) {
         </div>
       </Frame>
     ),
-    { ...SIZE, headers: { "Cache-Control": "public, max-age=3600" } },
+    { ...SIZE, headers: cacheFor(wallet ? 3600 : 300) },
   );
 }

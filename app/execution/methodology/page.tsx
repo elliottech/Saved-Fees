@@ -3,8 +3,6 @@ import { headers } from "next/headers";
 import { Section, Shell } from "@/execution/components";
 import { getMeta } from "@/execution/data";
 
-export const revalidate = 3600;
-
 export const metadata: Metadata = {
   title: "Methodology | tradingfees.wtf",
   description: "How the execution leaderboards replay real orders on the other venue's order book.",
@@ -25,16 +23,19 @@ export default async function Methodology() {
             millisecond, against the <b>other venue&apos;s historical order book</b>.
           </p>
           <p>
-            For every order: <b>saved = fee difference + price difference</b>. A positive number means the order
-            would have been cheaper on Lighter.
+            For every order: <b>saved = fee difference + price difference</b>, in both directions. A positive number
+            means the order was (or would have been) cheaper on Lighter; a negative one, cheaper on Hyperliquid.
           </p>
           <ul>
             <li>
-              <b>Fee difference</b>: the fee actually paid minus the fee the other venue would have charged.
+              <b>Fee difference</b>: Hyperliquid fee − Lighter fee for the order. One of the two is the fee actually
+              paid, the other the fee that venue would have charged.
             </li>
             <li>
-              <b>Price difference</b>: the real average fill price versus the average price from walking the other
-              venue&apos;s book level by level for the same size, times the size. Large orders pay for depth here.
+              <b>Price difference</b>: what the fill cost on Hyperliquid&apos;s book minus what it cost on
+              Lighter&apos;s, for the same size: (Hyperliquid average price − Lighter average price) × size for a
+              buy, the reverse for a sell. One side is the real fill, the other comes from walking the other
+              venue&apos;s book level by level, so large orders pay for depth here.
             </li>
           </ul>
         </div>
@@ -104,7 +105,7 @@ export default async function Methodology() {
           <ul>
             <li>
               Wallets are ranked by total dollars saved over the window (7, 30, 90 days or all stored days, all
-              ending on the last processed day). The default view lists wallets that would have saved; &ldquo;show
+              ending on the last processed day). The default view lists wallets with a positive total (cheaper on Lighter); &ldquo;show
               every wallet&rdquo; lists everyone.
             </li>
             <li>Profiles show every coin a wallet traded, including the ones where the other venue was worse.</li>

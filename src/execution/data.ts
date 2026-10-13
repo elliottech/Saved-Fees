@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { gunzipSync } from "zlib";
 import type {
   CoinSummary,
@@ -25,8 +26,8 @@ const BASE = (process.env.EXECUTION_DATA_URL ?? "https://execution-data.tradingf
 const LATEST_TTL = 60;
 const FILE_TTL = 86400;
 
-async function getJson<T>(url: string, revalidate: number): Promise<T | null> {
-  const res = await fetch(url, { next: { revalidate } });
+async function getJson<T>(url: string, init: RequestInit): Promise<T | null> {
+  const res = await fetch(url, init);
   if (res.status === 404 || res.status === 403) return null;
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
   const buf = Buffer.from(await res.arrayBuffer());
@@ -35,52 +36,60 @@ async function getJson<T>(url: string, revalidate: number): Promise<T | null> {
   return JSON.parse(text) as T;
 }
 
-export async function getLatest(): Promise<Latest> {
-  const latest = await getJson<Latest>(`${BASE}/latest.json`, LATEST_TTL);
+export const getLatest = cache(async (): Promise<Latest> => {
+  const latest = await getJson<Latest>(`${BASE}/latest.json`, { next: { revalidate: LATEST_TTL } });
   if (!latest) throw new Error("execution dataset: latest.json missing");
   return latest;
-}
+});
 
-async function getFile<T>(rel: string): Promise<T | null> {
+const getFreshLatest = cache(() => getJson<Latest>(`${BASE}/latest.json`, { cache: "no-store" }));
+
+/** A cached latest.json can point at a prefix that a newer publish already replaced: re-read it once on a miss. */
+const getRawFile = cache(async (rel: string): Promise<unknown> => {
   const { prefix } = await getLatest();
-  return getJson<T>(`${BASE}/${prefix}${rel}`, FILE_TTL);
-}
+  const data = await getJson<unknown>(`${BASE}/${prefix}${rel}`, { next: { revalidate: FILE_TTL } });
+  if (data != null) return data;
+  const fresh = await getFreshLatest();
+  if (!fresh || fresh.prefix === prefix) return null;
+  return getJson<unknown>(`${BASE}/${fresh.prefix}${rel}`, { next: { revalidate: FILE_TTL } });
+});
+
+const getFile = <T>(rel: string) => getRawFile(rel) as Promise<T | null>;
 
 function objects<T>(table: Table | null | undefined): T[] {
   if (!table) return [];
   return table.rows.map((row) => Object.fromEntries(table.columns.map((c, i) => [c, row[i]])) as T);
 }
 
-export async function getMeta(): Promise<Meta> {
+export const getMeta = cache(async (): Promise<Meta> => {
   const meta = await getFile<Meta>("meta.json");
   if (!meta) throw new Error("execution dataset: meta.json missing");
   return meta;
-}
+});
 
-export async function getLeaderboard(
-  direction: Direction,
-  window: WindowKey,
-  scope: string,
-  page: number,
-): Promise<LeaderboardPage | null> {
-  const raw = await getFile<Omit<LeaderboardPage, "rows"> & Table>(
-    `lb/${direction}/${window}/${scope}/${page}.json`,
-  );
-  if (!raw) return null;
-  return { ...raw, rows: objects<LeaderboardRow>(raw) };
-}
+export const getLeaderboard = cache(
+  async (direction: Direction, window: WindowKey, scope: string, page: number): Promise<LeaderboardPage | null> => {
+    const raw = await getFile<Omit<LeaderboardPage, "rows"> & Table>(
+      `lb/${direction}/${window}/${scope}/${page}.json`,
+    );
+    if (!raw) return null;
+    return { ...raw, rows: objects<LeaderboardRow>(raw) };
+  },
+);
 
-export async function getCoins(direction: Direction): Promise<CoinSummary[]> {
-  return objects<CoinSummary>(await getFile<Table>(`coins/${direction}.json`));
-}
+export const getCoins = cache(
+  async (direction: Direction): Promise<CoinSummary[]> =>
+    objects<CoinSummary>(await getFile<Table>(`coins/${direction}.json`)),
+);
 
-export async function getMarketDaily(direction: Direction): Promise<MarketDay[]> {
-  return objects<MarketDay>(await getFile<Table>(`daily/${direction}.json`));
-}
+export const getMarketDaily = cache(
+  async (direction: Direction): Promise<MarketDay[]> =>
+    objects<MarketDay>(await getFile<Table>(`daily/${direction}.json`)),
+);
 
-export async function getSearchIndex(): Promise<{ name: string; address: string }[]> {
-  return objects(await getFile<Table>("search.json"));
-}
+export const getSearchIndex = cache(
+  async (): Promise<{ name: string; address: string }[]> => objects(await getFile<Table>("search.json")),
+);
 
 export const ADDRESS_RE = /^0x[0-9a-f]{40}$/;
 
@@ -105,7 +114,7 @@ interface RawShard {
   >;
 }
 
-export async function getWallet(address: string): Promise<Wallet | null> {
+export const getWallet = cache(async (address: string): Promise<Wallet | null> => {
   const addr = address.toLowerCase();
   if (!ADDRESS_RE.test(addr)) return null;
   const shard = await getFile<RawShard>(`w/${addr.slice(2, 5)}.json`);
@@ -122,4 +131,4 @@ export async function getWallet(address: string): Promise<Wallet | null> {
     };
   }
   return { address: addr, name: raw.name, tags: raw.tags, directions };
-}
+});

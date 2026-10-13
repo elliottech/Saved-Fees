@@ -7,8 +7,6 @@ import { getLeaderboard, getMarketDaily, getMeta } from "@/execution/data";
 import { DIRECTIONS, fmtBps, fmtInt, fmtUsd, signClass } from "@/execution/format";
 import type { Direction } from "@/execution/types";
 
-export const revalidate = 300;
-
 export const metadata: Metadata = {
   title: "Execution leaderboards | tradingfees.wtf",
   description:
