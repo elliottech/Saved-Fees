@@ -20,7 +20,7 @@ import type {
 } from "./types";
 
 /** Base URL of the public dataset (R2 custom domain, or a local folder served over HTTP in dev). */
-const BASE = (process.env.EXECUTION_DATA_URL ?? "https://execution-data.tradingfees.wtf").replace(/\/$/, "");
+const BASE = (process.env.EXECUTION_DATA_URL ?? "https://tradingfees-data.pages.dev").replace(/\/$/, "");
 
 /** Files under a version prefix are immutable; latest.json moves once a day. */
 const LATEST_TTL = 60;
