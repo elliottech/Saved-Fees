@@ -250,3 +250,8 @@
 }
 .ex-not-compared b { color: var(--text); font-weight: 600; }
 .ex-coverage { font-size: 0.66rem; color: var(--text-muted); margin-bottom: 12px; }
+.ex-tag:focus-visible { outline: 2px solid var(--lighter); outline-offset: 1px; }
+.ex-tag-legend { margin-top: 8px; font-size: 0.66rem; color: var(--text-dim); }
+.ex-tag-legend summary { cursor: pointer; color: var(--text-muted); }
+.ex-tag-legend ul { list-style: none; margin-top: 6px; line-height: 1.6; }
+.ex-tag-legend b { color: var(--text); font-weight: 600; }

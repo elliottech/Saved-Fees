@@ -77,7 +77,7 @@ async function DirectionBlock({ direction, measure }: { direction: Direction; me
             price difference ({MEASURE_LABELS[measure]}) <b className={signClass(s.px_usd)}>{fmtUsd(s.px_usd, true)}</b>
           </span>
         </div>
-        <NotComparedLines nc={w.not_compared} target={info.target} />
+        <NotComparedLines nc={w.not_compared} target={info.target} maxBps={meta.max_replay_slippage_bps} />
       </Section>
       <Section
         label={`cheapest on Lighter · ${WINDOW_LABELS[windowKey].toLowerCase()}`}
@@ -89,8 +89,12 @@ async function DirectionBlock({ direction, measure }: { direction: Direction; me
       >
         <LeaderboardTable rows={top} publicTags={meta.public_tags} measure={measure} />
       </Section>
-      <Section label="all wallets combined, per day">
-        <DailyChart days={daily.map((d) => ({ day: d.day, total: pick(d, measure) ?? 0 }))} />
+      <Section label={`all wallets combined, per day · ${w.first_day} → ${w.last_day}`}>
+        <DailyChart
+          days={daily
+            .filter((d) => d.day >= w.first_day && d.day <= w.last_day)
+            .map((d) => ({ day: d.day, total: pick(d, measure) ?? 0 }))}
+        />
       </Section>
     </>
   );

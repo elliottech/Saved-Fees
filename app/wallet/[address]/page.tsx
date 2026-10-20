@@ -2,7 +2,16 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, permanentRedirect } from "next/navigation";
 import { CopyLink, WalletSearch } from "@/execution/client";
-import { DailyChart, MeasureToggle, NotComparedLines, Section, Shell, Stat, Tags } from "@/execution/components";
+import {
+  DailyChart,
+  MeasureToggle,
+  NotComparedLines,
+  Section,
+  Shell,
+  Stat,
+  TagLegend,
+  Tags,
+} from "@/execution/components";
 import { ADDRESS_RE, getMeta, getWallet } from "@/execution/data";
 import { SITE_URL } from "@/execution/layout";
 import {
@@ -14,6 +23,8 @@ import {
   WINDOW_LABELS,
   coinSlug,
   coverageText,
+  displayedWindow,
+  isWindow,
   fmtBps,
   fmtInt,
   fmtPx,
@@ -25,37 +36,61 @@ import {
   pick,
   pickBps,
   pickPx,
-  resolveWindow,
   shortAddr,
   signClass,
   windowLabel,
   windowOptions,
 } from "@/execution/format";
-import type { Direction, DirectionMeta, Measure, WalletDirection, WalletOrder, WindowKey } from "@/execution/types";
+import type {
+  Direction,
+  DirectionMeta,
+  Measure,
+  Meta,
+  Wallet,
+  WalletDirection,
+  WalletOrder,
+  WindowKey,
+} from "@/execution/types";
 
 interface Props {
   params: { address: string };
   searchParams: { window?: string; measure?: string };
 }
 
-/** Query string carrying the viewer's window / measure (defaults omitted). */
-function viewQuery(window: string | undefined, measure: Measure): string {
+/** Query string carrying the viewer's window / measure (defaults and unknown windows omitted). */
+function viewQuery(window: string | null | undefined, measure: Measure): string {
   const q = new URLSearchParams();
-  if (window && window !== DEFAULT_WINDOW) q.set("window", window);
+  if (isWindow(window ?? undefined) && window !== DEFAULT_WINDOW) q.set("window", window as WindowKey);
   if (measure !== DEFAULT_MEASURE) q.set("measure", measure);
   const qs = q.toString();
   return qs ? `?${qs}` : "";
 }
 
+/**
+ * What the share card shows: the first direction on the page and the window its panel displays (the
+ * viewer's window, or the panel's fallback when the wallet has no compared orders in it) — never a
+ * hand-picked one.
+ */
+function cardView(meta: Meta, wallet: Wallet, requested: string | undefined) {
+  const direction = (Object.keys(DIRECTIONS) as Direction[]).find(
+    (d) => wallet.directions[d] && meta.directions[d],
+  );
+  const window = direction
+    ? displayedWindow(meta.directions[direction]!, wallet.directions[direction]!.windows, requested)
+    : null;
+  return { direction, window };
+}
+
 export async function generateMetadata({ params, searchParams }: Props): Promise<Metadata> {
   const address = params.address.toLowerCase();
   if (!ADDRESS_RE.test(address)) return { title: "Wallet | tradingfees.wtf" };
-  const wallet = await getWallet(address);
+  const [meta, wallet] = await Promise.all([getMeta(), getWallet(address)]);
   if (!wallet) return { title: `${shortAddr(address)} | tradingfees.wtf`, robots: { index: false } };
   const who = wallet.name ?? shortAddr(address);
   const measure: Measure = isMeasure(searchParams.measure) ? searchParams.measure : DEFAULT_MEASURE;
-  // The card shows the window the viewer picked (30 days by default), never a hand-picked one.
-  const q = new URLSearchParams({ address, window: searchParams.window ?? DEFAULT_WINDOW, measure });
+  const { window } = cardView(meta, wallet, searchParams.window);
+  const q = new URLSearchParams({ address, measure });
+  if (window) q.set("window", window);
   const og = `/api/execution/og?${q}`;
   return {
     title: `${who} — execution cost | tradingfees.wtf`,
@@ -92,7 +127,7 @@ function OrdersTable({
               price
             </th>
             <th className="num" title="fee difference + price difference; positive = cheaper on Lighter">
-              saved
+              net
             </th>
           </tr>
         </thead>
@@ -104,18 +139,7 @@ function OrdersTable({
                 {o.coin} <span className={o.side === "B" ? "ex-pos" : "ex-neg"}>{o.side === "B" ? "buy" : "sell"}</span>
                 {o.twap && <span className="ex-tag">TWAP</span>}
               </td>
-              <td className="num">
-                {fmtUsd(o.notional)}
-                {o.coverage < 0.999 && (
-                  <span
-                    className="ex-muted"
-                    title={`${info.target}'s book filled ${(o.coverage * 100).toFixed(1)}% of the order; the comparison covers that part`}
-                  >
-                    {" "}
-                    ({(o.coverage * 100).toFixed(0)}%)
-                  </span>
-                )}
-              </td>
+              <td className="num">{fmtUsd(o.notional)}</td>
               <td className="num ex-hide-sm" title={o.hl_mid ? `HL mid before the order: ${fmtPx(o.hl_mid)}` : undefined}>
                 {fmtPx(o.hl_vwap)}
               </td>
@@ -140,7 +164,9 @@ function DirectionPanel({
   data,
   requested,
   measure,
+  maxBps,
 }: {
+  maxBps: number;
   address: string;
   direction: Direction;
   dm: DirectionMeta;
@@ -150,13 +176,13 @@ function DirectionPanel({
 }) {
   const info = DIRECTIONS[direction];
   const available = windowOptions(dm).filter((k) => data.windows[k]);
-  const resolved = resolveWindow(dm, requested);
-  const win: WindowKey | undefined = resolved && data.windows[resolved] ? resolved : available[available.length - 1];
+  const win = displayedWindow(dm, data.windows, requested);
   const w = win ? data.windows[win] : undefined;
   const cover = win ? dm.windows[win] : undefined;
   if (!win || !w || !cover) return null;
   const m = w[measure];
   const coins = data.coins.filter((c) => c.window === win);
+  const since = dm.top_orders_from ? ` since ${dm.top_orders_from}` : "";
   const best = measure === "mid" ? data.best_mid : data.best;
   const worst = measure === "mid" ? data.worst_mid : data.worst;
   const lbQuery = new URLSearchParams({ window: win, page: String(Math.ceil(m.rank / 100)) });
@@ -169,7 +195,9 @@ function DirectionPanel({
           <nav className="ex-tabs">
             {available.map((k) =>
               k === win ? (
-                <b key={k}>{windowLabel(k, dm.windows[k])}</b>
+                <b key={k} aria-current="true">
+                  {windowLabel(k, dm.windows[k])}
+                </b>
               ) : (
                 <Link key={k} href={`/wallet/${address}${viewQuery(k, measure)}`}>
                   {windowLabel(k, dm.windows[k])}
@@ -207,11 +235,11 @@ function DirectionPanel({
           <Stat
             label="orders"
             value={fmtInt(w.orders)}
-            sub={`${w.active_days} active day${w.active_days === 1 ? "" : "s"} · ${w.coins} coin${w.coins === 1 ? "" : "s"}`}
+            sub={`incl. not-compared orders in the same coins and days · ${w.active_days} active day${w.active_days === 1 ? "" : "s"} · ${w.coins} coin${w.coins === 1 ? "" : "s"}`}
           />
           <Stat label={`all ${info.source} taker volume`} value={fmtUsd(w.taker_notional)} sub="compared or not" />
         </div>
-        <NotComparedLines nc={w.not_compared} target={info.target} />
+        <NotComparedLines nc={w.not_compared} target={info.target} maxBps={maxBps} />
       </Section>
 
       <Section label={`per coin · ${WINDOW_LABELS[win].toLowerCase()}`}>
@@ -221,7 +249,7 @@ function DirectionPanel({
               <tr>
                 <th>coin</th>
                 <th className="num" title="fee difference + price difference; positive = cheaper on Lighter">
-                  saved
+                  net
                 </th>
                 <th className="num" title="saved / compared volume">
                   bps
@@ -267,14 +295,19 @@ function DirectionPanel({
         </div>
       </Section>
 
-      <Section label={`per day · ${dm.first_day} → ${dm.last_day}`}>
-        <DailyChart days={data.daily.map((d) => ({ day: d.day, total: pick(d, measure) ?? 0 }))} />
-      </Section>
+      {data.daily.length > 0 && (
+        <Section label={`per day · ${data.daily[0].day} → ${data.daily[data.daily.length - 1].day}`}>
+          <DailyChart
+            days={data.daily.map((d) => ({ day: d.day, total: pick(d, measure) ?? 0 }))}
+            gapText="without compared orders"
+          />
+        </Section>
+      )}
 
-      <Section label="best orders · compared orders, every published day">
+      <Section label={`best orders · compared orders${since}`}>
         <OrdersTable orders={best} info={info} measure={measure} />
       </Section>
-      <Section label="worst orders · compared orders, every published day">
+      <Section label={`worst orders · compared orders${since}`}>
         <OrdersTable orders={worst} info={info} measure={measure} />
       </Section>
     </>
@@ -309,7 +342,8 @@ export default async function WalletPage({ params, searchParams }: Props) {
   const directions = (Object.keys(DIRECTIONS) as Direction[]).filter(
     (d) => wallet.directions[d] && meta.directions[d],
   );
-  const shareUrl = `${SITE_URL}/wallet/${wallet.address}${viewQuery(searchParams.window, measure)}`;
+  // The share link reproduces the view the card shows.
+  const shareUrl = `${SITE_URL}/wallet/${wallet.address}${viewQuery(cardView(meta, wallet, searchParams.window).window, measure)}`;
   return (
     <Shell>
       <section className="ex-wallet-head">
@@ -318,10 +352,8 @@ export default async function WalletPage({ params, searchParams }: Props) {
           <div className="ex-muted ex-small ex-break">{wallet.address}</div>
           {wallet.tags.length > 0 && (
             <div className="ex-small ex-muted">
-              <Tags tags={wallet.tags} publicTags={meta.public_tags} />{" "}
-              <span title="Tags describe the wallet's Hyperliquid activity over the last 7 days">
-                · Hyperliquid activity, last 7 days
-              </span>
+              <Tags tags={wallet.tags} publicTags={meta.public_tags} />
+              <TagLegend tags={wallet.tags} publicTags={meta.public_tags} />
             </div>
           )}
         </div>
@@ -350,6 +382,7 @@ export default async function WalletPage({ params, searchParams }: Props) {
           data={wallet.directions[d]!}
           requested={searchParams.window}
           measure={measure}
+          maxBps={meta.max_replay_slippage_bps}
         />
       ))}
     </Shell>

@@ -12,7 +12,7 @@ import {
   SplitStats,
   Stat,
 } from "@/execution/components";
-import { getCoins, getLeaderboard, getMeta } from "@/execution/data";
+import { getCoinLeaderboard, getCoins, getLeaderboard, getMeta } from "@/execution/data";
 import {
   DEFAULT_MEASURE,
   DEFAULT_WINDOW,
@@ -25,6 +25,8 @@ import {
   isDirection,
   isMeasure,
   isSummary,
+  isWindow,
+  coinSides,
   pick,
   pickBps,
   resolveWindow,
@@ -41,12 +43,19 @@ interface Props {
   searchParams: { window?: string; coin?: string; page?: string; show?: string; measure?: string };
 }
 
-export function generateMetadata({ params }: Props): Metadata {
+export function generateMetadata({ params, searchParams }: Props): Metadata {
   if (!isDirection(params.direction)) return {};
   const info = DIRECTIONS[params.direction];
+  // The card: this direction, the viewer's window (the route resolves duplicates) and measure.
+  const q = new URLSearchParams({ direction: params.direction });
+  if (isWindow(searchParams.window)) q.set("window", searchParams.window);
+  if (isMeasure(searchParams.measure)) q.set("measure", searchParams.measure);
+  const og = `/api/execution/og?${q}`;
   return {
     title: `${info.title} — leaderboard | tradingfees.wtf`,
     description: `${info.question}. Every wallet ranked.`,
+    openGraph: { images: [{ url: og, width: 1200, height: 630 }] },
+    twitter: { card: "summary_large_image", images: [og] },
   };
 }
 
@@ -64,7 +73,6 @@ export default async function Leaderboard({ params, searchParams }: Props) {
   const saversOnly = searchParams.show === "savers";
   const coins = (await getCoins(direction)).filter((c) => c.window === window);
   const coin = coins.find((c) => c.slug === searchParams.coin) ?? null;
-  const scope = coin?.slug ?? "all";
   const s = w[measure];
 
   const wallets = coin ? coin.wallets : w.wallets;
@@ -73,8 +81,11 @@ export default async function Leaderboard({ params, searchParams }: Props) {
   const pages = Math.max(1, Math.ceil((saversOnly ? positive : wallets) / VIEW_SIZE));
   const page = Math.min(pages, Math.max(1, Math.floor(Number(searchParams.page)) || 1));
   const firstRank = (page - 1) * VIEW_SIZE + 1;
-  const lb = await getLeaderboard(direction, window, measure, scope, Math.ceil(firstRank / meta.page_size));
-  const rows = (lb?.rows ?? []).filter(
+  const lbPage = Math.ceil(firstRank / meta.page_size);
+  const lbRows = coin
+    ? await getCoinLeaderboard(direction, window, measure, coin, lbPage)
+    : ((await getLeaderboard(direction, window, measure, "all", lbPage))?.rows ?? []);
+  const rows = lbRows.filter(
     (r) => r.rank >= firstRank && r.rank < firstRank + VIEW_SIZE && (!saversOnly || r.rank <= positive),
   );
 
@@ -148,7 +159,7 @@ export default async function Leaderboard({ params, searchParams }: Props) {
                 sub={fmtBps(pickBps(coin, measure))}
                 tone={signClass(coinTotal)}
               />
-              <Stat label="wallets" value={fmtInt(coin.wallets)} sub={`${fmtInt(positive)} cheaper on Lighter`} />
+              <SplitStats s={coinSides(coin, measure)} wallets={coin.wallets} />
               <Stat label="volume compared" value={fmtUsd(coin.replayed_notional)} />
             </>
           ) : (
@@ -163,12 +174,14 @@ export default async function Leaderboard({ params, searchParams }: Props) {
             </>
           )}
         </div>
-        {!coin && <NotComparedLines nc={w.not_compared} target={info.target} />}
+        {!coin && (
+          <NotComparedLines nc={w.not_compared} target={info.target} maxBps={meta.max_replay_slippage_bps} />
+        )}
         <p className="ex-muted ex-small">
           {saversOnly
             ? `The ${fmtInt(positive)} wallets that came out cheaper on Lighter, best first.`
             : `All ${fmtInt(wallets)} wallets, cheapest on Lighter first.`}{" "}
-          Saved = venue fee difference + price difference ({MEASURE_LABELS[measure]}); bps over compared volume.
+          Net = venue fee difference + price difference ({MEASURE_LABELS[measure]}); bps over compared volume.
         </p>
         <LeaderboardTable rows={rows} publicTags={meta.public_tags} measure={measure} showTopCoin={!coin} />
         <Pager page={page} pages={pages} href={(p) => href({ page: p })} />

@@ -17,7 +17,7 @@ import {
   tagText,
   tagValue,
 } from "./format";
-import type { LeaderboardRow, Measure, MeasureSummary, NotCompared, Tag } from "./types";
+import type { LeaderboardRow, Measure, NotCompared, Sides, Tag } from "./types";
 
 export function Shell({ children, subtitle }: { children: ReactNode; subtitle?: ReactNode }) {
   return (
@@ -67,12 +67,39 @@ export function Tags({ tags, publicTags }: { tags: Tag[]; publicTags: Record<str
         const value = tagValue(t);
         const help = publicTags[t[0]] ?? "";
         return (
-          <span key={`${t[0]}:${t[2] ?? ""}`} className="ex-tag" title={value ? `${help} (${value})` : help}>
+          <span
+            key={`${t[0]}:${t[2] ?? ""}`}
+            className="ex-tag"
+            title={value ? `${help} (${value})` : help}
+            aria-label={`${tagText(t)}: ${help}${value ? ` (${value})` : ""}`}
+            tabIndex={0}
+          >
             {tagText(t)}
           </span>
         );
       })}
     </span>
+  );
+}
+
+/** The tags' explanations as text (tooltips aren't reachable on touch screens). */
+export function TagLegend({ tags, publicTags }: { tags: Tag[]; publicTags: Record<string, string> }) {
+  if (!tags.length) return null;
+  return (
+    <details className="ex-tag-legend">
+      <summary>what the tags mean · Hyperliquid activity, last 7 days</summary>
+      <ul>
+        {tags.map((t) => {
+          const value = tagValue(t);
+          return (
+            <li key={`${t[0]}:${t[2] ?? ""}`}>
+              <b>{tagText(t)}</b>: {publicTags[t[0]] ?? ""}
+              {value ? ` (${value})` : ""}
+            </li>
+          );
+        })}
+      </ul>
+    </details>
   );
 }
 
@@ -98,7 +125,7 @@ export function MeasureToggle({ measure, href }: { measure: Measure; href: (m: M
       <span className="ex-muted">price:</span>
       {MEASURES.map((m) =>
         m === measure ? (
-          <b key={m} title={MEASURE_HELP[m]}>
+          <b key={m} title={MEASURE_HELP[m]} aria-current="true">
             {MEASURE_LABELS[m]}
           </b>
         ) : (
@@ -112,12 +139,20 @@ export function MeasureToggle({ measure, href }: { measure: Measure; href: (m: M
 }
 
 /** "Not compared" volume: shown next to the totals, never inside them. */
-export function NotComparedLines({ nc, target }: { nc: NotCompared | undefined; target: string }) {
+export function NotComparedLines({
+  nc,
+  target,
+  maxBps,
+}: {
+  nc: NotCompared | undefined;
+  target: string;
+  maxBps: number;
+}) {
   if (!nc) return null;
   const lines: [string, number][] = [
     ["Liquidations", nc.liquidation_notional],
-    [`Book too thin on ${target} (fill > 100 bps from mid)`, nc.thin_notional],
-    [`Other (coin not on both venues, no book data)`, nc.other_notional],
+    [`Book too thin on ${target} (fill > ${maxBps} bps from mid, or not fully filled)`, nc.thin_notional],
+    ["Other (coin not on both venues, no book data, price mismatch)", nc.other_notional],
   ];
   const shown = lines.filter(([, v]) => v >= 0.5);
   if (!shown.length) return null;
@@ -151,7 +186,7 @@ export function LeaderboardTable({
           <tr>
             <th>#</th>
             <th>wallet</th>
-            <th className="num" title="fee difference + price difference; positive = cheaper on Lighter">saved</th>
+            <th className="num" title="fee difference + price difference; positive = cheaper on Lighter">net</th>
             <th className="num" title="saved / compared volume">bps</th>
             <th className="num ex-hide-sm" title="Hyperliquid venue fee − Lighter venue fee">fees</th>
             <th className="num ex-hide-sm" title={MEASURE_HELP[measure]}>price</th>
@@ -181,21 +216,24 @@ export function LeaderboardTable({
   );
 }
 
-/** The wallets on each side of zero: "saved by X wallets" / "cost Y wallets more". */
-export function SplitStats({ s, wallets }: { s: MeasureSummary; wallets: number }) {
+/**
+ * The wallets on each side of zero: "saved by X wallets" / "cost Y wallets more". Amounts are shown unsigned —
+ * the label says which way — in the side's colour; an empty side reads "—".
+ */
+export function SplitStats({ s, wallets }: { s: Sides; wallets: number }) {
   return (
     <>
       <Stat
-        label={`saved by ${fmtWallets(s.positive_wallets)}`}
-        value={fmtUsd(s.positive_total_usd, true)}
-        sub={`cheaper on Lighter · of ${fmtInt(wallets)}`}
-        tone={signClass(s.positive_total_usd)}
+        label={s.positive_wallets ? `saved by ${fmtWallets(s.positive_wallets)}` : "saved by no wallet"}
+        value={s.positive_wallets ? fmtUsd(Math.abs(s.positive_total_usd)) : "—"}
+        sub={`cheaper on Lighter · of ${fmtWallets(wallets)}`}
+        tone={s.positive_wallets ? "ex-pos" : ""}
       />
       <Stat
-        label={`cost ${fmtWallets(s.negative_wallets)} more`}
-        value={fmtUsd(s.negative_total_usd, true)}
-        sub={`cheaper on Hyperliquid · of ${fmtInt(wallets)}`}
-        tone={signClass(s.negative_total_usd)}
+        label={s.negative_wallets ? `cost ${fmtWallets(s.negative_wallets)} more` : "cost no wallet more"}
+        value={s.negative_wallets ? fmtUsd(Math.abs(s.negative_total_usd)) : "—"}
+        sub={`cheaper on Hyperliquid · of ${fmtWallets(wallets)}`}
+        tone={s.negative_wallets ? "ex-neg" : ""}
       />
     </>
   );
@@ -218,7 +256,16 @@ const dayNum = (d: string) => Math.round(Date.parse(`${d}T00:00:00Z`) / DAY_MS);
  * Daily bars (green / red) on a date axis — days without data stay empty — with the
  * cumulative total as a step line. Pure SVG, no client JS.
  */
-export function DailyChart({ days, label = "Daily totals" }: { days: { day: string; total: number }[]; label?: string }) {
+export function DailyChart({
+  days,
+  label = "Daily totals",
+  gapText = "without data",
+}: {
+  days: { day: string; total: number }[];
+  label?: string;
+  /** "N days <gapText>" under the chart. */
+  gapText?: string;
+}) {
   if (!days.length) return <p className="ex-muted">No data.</p>;
   const W = 640;
   const H = 180;
@@ -268,7 +315,7 @@ export function DailyChart({ days, label = "Daily totals" }: { days: { day: stri
         <span>{days[0].day}</span>
         <span>
           cumulative <b className={signClass(cum[cum.length - 1])}>{fmtUsd(cum[cum.length - 1], true)}</b>
-          {missing > 0 && <span>{` · ${missing} day${missing === 1 ? "" : "s"} without data`}</span>}
+          {missing > 0 && <span>{` · ${missing} day${missing === 1 ? "" : "s"} ${gapText}`}</span>}
         </span>
         <span>{days[days.length - 1].day}</span>
       </div>

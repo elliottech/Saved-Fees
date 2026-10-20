@@ -63,7 +63,8 @@ export default async function Methodology() {
               separately.
             </li>
             <li>
-              <b>Other</b>: coins not listed on both venues, and moments without usable book data.
+              <b>Other</b>: coins not listed on both venues, moments without usable book data, and replays whose
+              price doesn&apos;t match the order&apos;s (a sanity check on the market mapping).
             </li>
             <li>
               <b>Not modelled</b>: latency, and the order&apos;s impact on later orders — each order is replayed on its
@@ -94,7 +95,8 @@ export default async function Methodology() {
               </li>
               <li>
                 <b>Mids</b>: Hyperliquid&apos;s is the last quote before the order (Tardis); Lighter&apos;s is the mid of
-                the book the order is replayed on.
+                the book the order is replayed on. Without a Hyperliquid quote before the order, that order&apos;s
+                mid-adjusted price difference is its raw one.
               </li>
             </ul>
           </div>
@@ -118,8 +120,9 @@ export default async function Methodology() {
                 5- and 20-level snapshots, and 0xArchive&apos;s full-depth book when the order needs deeper levels.
               </li>
               <li>
-                <b>Mids</b>: Lighter&apos;s is the last quote before the order (Tardis); Hyperliquid&apos;s is the mid of
-                the book the order is replayed on.
+                <b>Mids</b>: Lighter&apos;s is the last quote before the order (Tardis, available from 2026-04-17);
+                Hyperliquid&apos;s is the mid of the book the order is replayed on. Without a Lighter quote before the
+                order, that order&apos;s mid-adjusted price difference is its raw one.
               </li>
             </ul>
           </div>
@@ -129,9 +132,10 @@ export default async function Methodology() {
       <Section label="data coverage">
         <div className="ex-prose">
           <p>
-            Windows end on the last processed day. Only days computed with the current rules are included, so a
-            window can cover fewer days than its name; each view shows the days it actually covers. A window
-            covering the same days as a shorter one is not offered.
+            Windows (7, 30 and 90 days) end on the last processed day; history is kept for 90 days. Only days
+            computed with the current rules are included, so a window can cover fewer days than its name; each
+            view shows the days it actually covers. A window covering the same days as a shorter one is not
+            offered.
           </p>
           <ul>
             {directions.map((d) => {

@@ -11,13 +11,13 @@ import {
   fmtInt,
   fmtUsd,
   fmtWallets,
+  isDirection,
   isMeasure,
   isSummary,
   isZero,
   outcomeText,
   resolveWindow,
   shortAddr,
-  signClass,
 } from "@/execution/format";
 import type { Direction, Measure, Meta, Wallet, WindowKey, WindowSummary } from "@/execution/types";
 
@@ -56,21 +56,36 @@ function Frame({ children }: { children: React.ReactNode }) {
   );
 }
 
-function defaultCard(w: WindowSummary | undefined, win: WindowKey | null, measure: Measure) {
+/** Green / red by sign; zero in the neutral text colour. */
+const toneColor = (v: number | null | undefined) => (isZero(v) ? TEXT : (v as number) < 0 ? RED : GREEN);
+
+/** One side of zero, unsigned (the words say which way); an empty side reads "—". */
+function sideLine(label: string, wallets: number, total: number) {
+  return (
+    <span style={{ display: "flex", gap: 14 }}>
+      <span>{wallets ? `${label.replace("{n}", fmtWallets(wallets))}:` : `${label.replace("{n}", "no wallet")}:`}</span>
+      <span style={{ color: wallets ? (total < 0 ? RED : GREEN) : MUTED }}>
+        {wallets ? fmtUsd(Math.abs(total)) : "—"}
+      </span>
+    </span>
+  );
+}
+
+function defaultCard(direction: Direction, w: WindowSummary | undefined, win: WindowKey | null, measure: Measure) {
   const s = w?.[measure];
   return (
     <Frame>
       <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
         <div style={{ fontSize: 34, color: MUTED }}>
-          {w && win ? `Hyperliquid traders on Lighter · ${WINDOW_LABELS[win].toLowerCase()}` : "Hyperliquid vs Lighter"}
+          {w && win ? `${DIRECTIONS[direction].title} · ${WINDOW_LABELS[win].toLowerCase()}` : "Hyperliquid vs Lighter"}
         </div>
-        <div style={{ fontSize: 84, color: s && signClass(s.total_usd) === "ex-neg" ? RED : GREEN }}>
+        <div style={{ fontSize: 84, color: s ? toneColor(s.total_usd) : GREEN }}>
           {s ? `${fmtUsd(s.total_usd, true)} net` : "Execution leaderboards"}
         </div>
         {s && w && (
           <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: 30, color: TEXT }}>
-            <span>{`saved by ${fmtWallets(s.positive_wallets)}: ${fmtUsd(s.positive_total_usd, true)}`}</span>
-            <span>{`cost ${fmtWallets(s.negative_wallets)} more: ${fmtUsd(s.negative_total_usd, true)}`}</span>
+            {sideLine("saved by {n}", s.positive_wallets, s.positive_total_usd)}
+            {sideLine("cost {n} more", s.negative_wallets, s.negative_total_usd)}
             <span style={{ fontSize: 24, color: MUTED }}>
               {`${fmtBps(s.total_bps)} · ${MEASURE_LABELS[measure]} · ${coverageText(w)}`}
             </span>
@@ -96,18 +111,23 @@ export async function GET(req: NextRequest) {
   } catch {}
 
   if (!ADDRESS_RE.test(address)) {
-    const dm = meta?.directions.hl_to_lighter;
+    const d = params.get("direction") ?? "";
+    const direction: Direction = isDirection(d) ? d : "hl_to_lighter";
+    const dm = meta?.directions[direction];
     const win = dm ? resolveWindow(dm, requested) : null;
     const w = dm && win ? dm.windows[win] : undefined;
     const summary = isSummary(w) ? w : undefined;
-    return new ImageResponse(defaultCard(summary, win, measure), { ...SIZE, headers: cacheFor(summary ? 3600 : 60) });
+    return new ImageResponse(defaultCard(direction, summary, win, measure), {
+      ...SIZE,
+      headers: cacheFor(summary ? 3600 : 60),
+    });
   }
 
   let wallet: Wallet | null;
   try {
     wallet = await getWallet(address);
   } catch {
-    return new ImageResponse(defaultCard(undefined, null, measure), { ...SIZE, headers: cacheFor(60) });
+    return new ImageResponse(defaultCard("hl_to_lighter", undefined, null, measure), { ...SIZE, headers: cacheFor(60) });
   }
   // The viewer's window (30 days by default) — never switched to a more flattering one.
   const direction = (Object.keys(DIRECTIONS) as Direction[]).find((d) => wallet?.directions[d] && meta?.directions[d]);
@@ -128,7 +148,7 @@ export async function GET(req: NextRequest) {
               <div style={{ fontSize: 34, color: MUTED }}>
                 {`${outcomeText(direction, s.total_usd)} · ${WINDOW_LABELS[win].toLowerCase()}`}
               </div>
-              <div style={{ fontSize: 120, color: signClass(s.total_usd) === "ex-neg" ? RED : isZero(s.total_usd) ? TEXT : GREEN }}>
+              <div style={{ fontSize: 120, color: toneColor(s.total_usd) }}>
                 {isZero(s.total_usd) ? "$0" : fmtUsd(Math.abs(s.total_usd))}
               </div>
               <div style={{ fontSize: 30, color: TEXT }}>

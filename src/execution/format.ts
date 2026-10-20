@@ -1,4 +1,14 @@
-import type { Direction, DirectionMeta, Measure, Tag, WindowCoverage, WindowKey, WindowSummary } from "./types";
+import type {
+  CoinSummary,
+  Direction,
+  DirectionMeta,
+  Measure,
+  Sides,
+  Tag,
+  WindowCoverage,
+  WindowKey,
+  WindowSummary,
+} from "./types";
 
 export const DIRECTIONS: Record<
   Direction,
@@ -24,14 +34,13 @@ export const WINDOW_LABELS: Record<WindowKey, string> = {
   "7d": "7 days",
   "30d": "30 days",
   "90d": "90 days",
-  all: "All time",
 };
 
 export const isDirection = (v: string): v is Direction => v in DIRECTIONS;
 export const isWindow = (v: string | undefined): v is WindowKey =>
-  v === "7d" || v === "30d" || v === "90d" || v === "all";
+  v === "7d" || v === "30d" || v === "90d";
 
-export const WINDOW_ORDER: WindowKey[] = ["7d", "30d", "90d", "all"];
+export const WINDOW_ORDER: WindowKey[] = ["7d", "30d", "90d"];
 export const DEFAULT_WINDOW: WindowKey = "30d";
 
 /** Windows with data of their own, shortest first (a window covering the same days as a shorter one is hidden). */
@@ -50,6 +59,21 @@ export function resolveWindow(dm: DirectionMeta, requested?: string): WindowKey 
   return windowOptions(dm)[0] ?? null;
 }
 
+/**
+ * The window a wallet's panel shows for a direction: the requested one (resolved), or — when the wallet has no
+ * compared orders in it — its longest window. Page, share link and share card all use this one.
+ */
+export function displayedWindow(
+  dm: DirectionMeta,
+  walletWindows: Partial<Record<WindowKey, unknown>>,
+  requested?: string,
+): WindowKey | null {
+  const resolved = resolveWindow(dm, requested);
+  if (resolved && walletWindows[resolved]) return resolved;
+  const available = windowOptions(dm).filter((k) => walletWindows[k]);
+  return available[available.length - 1] ?? null;
+}
+
 export const isSummary = (w: WindowCoverage | undefined): w is WindowSummary => !!w && "wallets" in w;
 
 /** "2026-10-01 → 2026-10-19 · 19 days with data" — the days a window actually covers. */
@@ -60,7 +84,7 @@ export function coverageText(w: WindowCoverage): string {
 
 /** A window's tab label: its nominal length, or the days it covers when that is shorter. */
 export function windowLabel(key: WindowKey, w: WindowCoverage | undefined): string {
-  if (!w || key === "all" || w.days == null || w.days_with_data >= w.days) return WINDOW_LABELS[key];
+  if (!w || w.days_with_data >= w.days) return WINDOW_LABELS[key];
   return `${WINDOW_LABELS[key]} (${w.days_with_data} with data)`;
 }
 
@@ -72,6 +96,18 @@ export const MEASURE_HELP: Record<Measure, string> = {
   mid: "Each venue's fill measured against its own mid price, so the standing price gap between the two venues doesn't count.",
   raw: "Fill price on one venue minus fill price on the other, including any standing price gap between the venues.",
 };
+
+/** A coin's two sides of zero under a measure. */
+export function coinSides(c: CoinSummary, m: Measure): Sides {
+  return m === "mid"
+    ? {
+        positive_wallets: c.positive_wallets_mid,
+        positive_total_usd: c.positive_total_mid_usd,
+        negative_wallets: c.negative_wallets_mid,
+        negative_total_usd: c.negative_total_mid_usd,
+      }
+    : c;
+}
 
 /** A flat row's total / bps / price difference under a measure. */
 export function pick<T extends { total_usd: number; total_mid_usd: number | null }>(row: T, m: Measure): number | null {

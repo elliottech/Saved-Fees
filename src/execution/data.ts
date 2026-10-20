@@ -39,13 +39,16 @@ async function getJson<T>(url: string, init: RequestInit): Promise<T | null> {
   return JSON.parse(text) as T;
 }
 
+/** This schema's own pointer (the root latest.json is for older readers). */
+const LATEST = `${BASE}/v${SCHEMA}/latest.json`;
+
 export const getLatest = cache(async (): Promise<Latest> => {
-  const latest = await getJson<Latest>(`${BASE}/latest.json`, { next: { revalidate: LATEST_TTL } });
-  if (!latest) throw new Error("execution dataset: latest.json missing");
+  const latest = await getJson<Latest>(LATEST, { next: { revalidate: LATEST_TTL } });
+  if (!latest) throw new Error(`execution dataset: v${SCHEMA}/latest.json missing`);
   return latest;
 });
 
-const getFreshLatest = cache(() => getJson<Latest>(`${BASE}/latest.json`, { cache: "no-store" }));
+const getFreshLatest = cache(() => getJson<Latest>(LATEST, { cache: "no-store" }));
 
 /** A cached latest.json can point at a prefix that a newer publish already replaced: re-read it once on a miss. */
 const getRawFile = cache(async (rel: string): Promise<unknown> => {
@@ -85,6 +88,29 @@ export const getLeaderboard = cache(
     );
     if (!raw) return null;
     return { ...raw, rows: objects<LeaderboardRow>(raw) };
+  },
+);
+
+interface RawBundle {
+  columns: string[];
+  coins: Record<string, { coin: string; wallets: number; rows: unknown[][] }>;
+}
+
+/** A coin's ranking: its own page, or its slice of a bundle (coins with few wallets). */
+export const getCoinLeaderboard = cache(
+  async (
+    direction: Direction,
+    window: WindowKey,
+    measure: Measure,
+    coin: CoinSummary,
+    page: number,
+  ): Promise<LeaderboardRow[]> => {
+    if (coin.bundle == null) {
+      return (await getLeaderboard(direction, window, measure, coin.slug, page))?.rows ?? [];
+    }
+    const raw = await getFile<RawBundle>(`lbs/${direction}/${window}/${measure}/${coin.bundle}.json`);
+    const entry = raw?.coins[coin.slug];
+    return raw && entry ? objects<LeaderboardRow>({ columns: raw.columns, rows: entry.rows }) : [];
   },
 );
 

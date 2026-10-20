@@ -3,13 +3,14 @@
 export const SCHEMA = 2;
 
 export type Direction = "hl_to_lighter" | "lighter_to_hl";
-export type WindowKey = "7d" | "30d" | "90d" | "all";
+export type WindowKey = "7d" | "30d" | "90d";
 /** mid: each venue's execution vs its own mid (default); raw: the raw price difference. */
 export type Measure = "mid" | "raw";
 
 export interface Latest {
   version: string;
   prefix: string;
+  schema?: number;
   generated_at: string;
 }
 
@@ -19,7 +20,7 @@ export interface NotCompared {
   other_notional: number;
 }
 
-export interface MeasureSummary {
+export interface MeasureSummary extends Sides {
   total_usd: number;
   total_bps: number | null;
   px_usd: number;
@@ -34,7 +35,7 @@ export interface MeasureSummary {
 
 /** What a window actually covers (always present). */
 export interface WindowCoverage {
-  days: number | null;
+  days: number;
   start: string;
   end: string;
   first_day: string;
@@ -208,14 +209,30 @@ export interface CoinSummary {
   window: WindowKey;
   wallets: number;
   pages: number;
+  /** Bundle file holding this coin's whole ranking, or null when it has pages of its own. */
+  bundle: number | null;
   replayed_notional: number;
   fee_saved_usd: number;
   total_mid_usd: number;
   total_mid_bps: number | null;
   positive_wallets_mid: number;
+  positive_total_mid_usd: number;
+  negative_wallets_mid: number;
+  negative_total_mid_usd: number;
   total_usd: number;
   total_bps: number | null;
   positive_wallets: number;
+  positive_total_usd: number;
+  negative_wallets: number;
+  negative_total_usd: number;
+}
+
+/** The two sides of zero under one measure (headline split). */
+export interface Sides {
+  positive_wallets: number;
+  positive_total_usd: number;
+  negative_wallets: number;
+  negative_total_usd: number;
 }
 
 export interface MarketDay {
