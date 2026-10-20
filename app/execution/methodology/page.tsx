@@ -2,40 +2,72 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { Section, Shell } from "@/execution/components";
 import { getMeta } from "@/execution/data";
+import { DIRECTIONS, WINDOW_LABELS, WINDOW_ORDER, coverageText } from "@/execution/format";
+import type { Direction } from "@/execution/types";
 
 export const metadata: Metadata = {
   title: "Methodology | tradingfees.wtf",
   description: "How the execution leaderboards replay real orders on the other venue's order book.",
 };
 
+const fmtStamp = (iso: string) => iso.replace("T", " ").replace(/(\+00:00|Z)$/, " UTC");
+
 export default async function Methodology() {
   headers(); // render per request: the dataset isn't reachable at build time
   const meta = await getMeta();
   const hl = meta.directions.hl_to_lighter;
   const lighter = meta.directions.lighter_to_hl;
+  const maxBps = meta.max_replay_slippage_bps;
+  const directions = (Object.keys(DIRECTIONS) as Direction[]).filter((d) => meta.directions[d]);
   return (
     <Shell subtitle="how every number on the leaderboards is computed">
       <Section label="the idea">
         <div className="ex-prose">
           <p>
-            Fee tables only tell half the story: a cheaper venue is only cheaper if its order book fills you at a
-            similar price. So we take <b>real taker orders</b> from one venue and replay each of them, at the same
-            millisecond, against the <b>other venue&apos;s historical order book</b>.
-          </p>
-          <p>
-            For every order: <b>saved = fee difference + price difference</b>, in both directions. A positive number
-            means the order was (or would have been) cheaper on Lighter; a negative one, cheaper on Hyperliquid.
+            We take <b>real taker orders</b> from one venue and replay each of them, at the same millisecond, against
+            the <b>other venue&apos;s historical order book</b>. For every order:{" "}
+            <b>saved = fee difference + price difference</b>. Positive means cheaper on Lighter, negative cheaper on
+            Hyperliquid — in both directions.
           </p>
           <ul>
             <li>
-              <b>Fee difference</b>: Hyperliquid fee − Lighter fee for the order. One of the two is the fee actually
-              paid, the other the fee that venue would have charged.
+              <b>Fee difference</b>: Hyperliquid venue fee − Lighter venue fee. Front-end fees (Hyperliquid builder
+              codes, Lighter integrator fees) are left out on both sides.
             </li>
             <li>
-              <b>Price difference</b>: what the fill cost on Hyperliquid&apos;s book minus what it cost on
-              Lighter&apos;s, for the same size: (Hyperliquid average price − Lighter average price) × size for a
-              buy, the reverse for a sell. One side is the real fill, the other comes from walking the other
-              venue&apos;s book level by level, so large orders pay for depth here.
+              <b>Price difference, mid-adjusted</b> (the default): each venue&apos;s fill is measured against its own
+              mid price just before the order, and the two execution costs are compared. The standing price gap
+              between the venues drops out.
+            </li>
+            <li>
+              <b>Price difference, raw</b> (switch &ldquo;price&rdquo; to raw): (Hyperliquid average price − Lighter
+              average price) × size for a buy, the reverse for a sell. Includes any standing price gap between the
+              venues.
+            </li>
+            <li>
+              Basis points are over <b>compared volume</b>: the taker volume that was replayed and compared.
+            </li>
+          </ul>
+        </div>
+      </Section>
+
+      <Section label="not compared">
+        <div className="ex-prose">
+          <ul>
+            <li>
+              <b>Liquidations</b>: never compared; profiles list their volume separately.
+            </li>
+            <li>
+              <b>Book too thin</b>: if the other venue&apos;s book would fill the order more than {maxBps} bps from its
+              mid, or couldn&apos;t fill it completely, the order is not compared; profiles list that volume
+              separately.
+            </li>
+            <li>
+              <b>Other</b>: coins not listed on both venues, and moments without usable book data.
+            </li>
+            <li>
+              <b>Not modelled</b>: latency, and the order&apos;s impact on later orders — each order is replayed on its
+              own against the book as it was.
             </li>
           </ul>
         </div>
@@ -46,30 +78,23 @@ export default async function Methodology() {
           <div className="ex-prose">
             <ul>
               <li>
-                <b>Orders</b>: every Hyperliquid perp taker fill from the node fill archive, grouped into orders by
-                wallet, order id and coin. Each TWAP slice counts as its own order; liquidations are included.
+                <b>Orders</b>: Hyperliquid perp taker fills from the node fill archive, grouped into orders by wallet,
+                order id and coin. Each TWAP slice is its own order.
               </li>
               <li>
-                <b>Hyperliquid fee</b>: the fee actually paid on each fill, including builder (front-end) and
-                deployer fees. Priority gas, paid separately in HYPE, is not counted.
+                <b>Hyperliquid fee</b>: the venue fee actually paid on each fill (incl. HIP-3 deployer fees and the
+                wallet&apos;s discounts), without builder fees. Priority gas is not counted.
               </li>
               <li>
                 <b>Lighter fee</b>: 0 — Lighter&apos;s standard account charges no trading fees.
               </li>
               <li>
-                <b>Lighter price</b>: the order is walked through Lighter&apos;s full order book at the same
-                millisecond (historical data from Tardis), like a market order capped at 50% from mid. If
-                Lighter&apos;s book couldn&apos;t fill the whole size, only the filled part is compared.
+                <b>Lighter price</b>: the order walked through Lighter&apos;s full L2 order book (Tardis) at the same
+                millisecond, like a market order.
               </li>
               <li>
-                <b>Coins</b>: only coins listed on both venues; orders without a usable Lighter book at that moment
-                are left out.
-              </li>
-              <li>
-                <b>Not modelled</b>: latency and market impact on later orders — each order is replayed on its own.
-              </li>
-              <li>
-                <b>Data</b>: {hl.first_day} → {hl.last_day}, updated daily.
+                <b>Mids</b>: Hyperliquid&apos;s is the last quote before the order (Tardis); Lighter&apos;s is the mid of
+                the book the order is replayed on.
               </li>
             </ul>
           </div>
@@ -81,34 +106,68 @@ export default async function Methodology() {
           <div className="ex-prose">
             <ul>
               <li>
-                <b>Orders</b>: every Lighter perp taker order, with the fee actually paid.
+                <b>Orders</b>: Lighter perp taker orders, with the venue fee actually paid (without integrator fees).
               </li>
               <li>
-                <b>Hyperliquid fee</b>: Hyperliquid&apos;s base fee schedule at the tier the wallet&apos;s own
-                14-day volume would reach, with the market&apos;s HIP-3 fee multiplier where it applies. No staking
-                or referral discounts.
+                <b>Hyperliquid fee</b>: Hyperliquid&apos;s base taker fee at the tier the wallet&apos;s own 14-day
+                volume would reach, times the market&apos;s HIP-3 fee multiplier where it applies. No staking or
+                referral discounts.
               </li>
               <li>
-                <b>Hyperliquid price</b>: the order walked through Hyperliquid&apos;s full order book at the same
-                moment.
+                <b>Hyperliquid price</b>: the order walked through Hyperliquid&apos;s book at the same moment: Tardis
+                5- and 20-level snapshots, and 0xArchive&apos;s full-depth book when the order needs deeper levels.
               </li>
               <li>
-                <b>Data</b>: {lighter.first_day} → {lighter.last_day}, updated daily.
+                <b>Mids</b>: Lighter&apos;s is the last quote before the order (Tardis); Hyperliquid&apos;s is the mid of
+                the book the order is replayed on.
               </li>
             </ul>
           </div>
         </Section>
       )}
 
+      <Section label="data coverage">
+        <div className="ex-prose">
+          <p>
+            Windows end on the last processed day. Only days computed with the current rules are included, so a
+            window can cover fewer days than its name; each view shows the days it actually covers. A window
+            covering the same days as a shorter one is not offered.
+          </p>
+          <ul>
+            {directions.map((d) => {
+              const dm = meta.directions[d]!;
+              return (
+                <li key={d}>
+                  <b>{DIRECTIONS[d].title}</b>: {dm.first_day} → {dm.last_day} ({dm.days_with_data} day{dm.days_with_data === 1 ? "" : "s"} with data),
+                  updated {fmtStamp(dm.updated_at)}.
+                  <ul>
+                    {WINDOW_ORDER.filter((k) => dm.windows[k] && !dm.windows[k]!.duplicate_of).map((k) => (
+                      <li key={k}>
+                        {WINDOW_LABELS[k]}: {coverageText(dm.windows[k]!)}
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              );
+            })}
+          </ul>
+          <p className="ex-small ex-muted">Dataset generated {fmtStamp(meta.generated_at)}.</p>
+        </div>
+      </Section>
+
       <Section label="leaderboards and profiles">
         <div className="ex-prose">
           <ul>
             <li>
-              Wallets are ranked by total dollars saved over the window (7, 30, 90 days or all stored days, all
-              ending on the last processed day). The default view lists wallets with a positive total (cheaper on Lighter); &ldquo;show
-              every wallet&rdquo; lists everyone.
+              Every wallet with compared volume is ranked by its total over the window, cheapest on Lighter first.
+              Headlines show the net over all wallets, next to what the wallets that came out ahead saved and what
+              the others would have paid more.
             </li>
-            <li>Profiles show every coin a wallet traded, including the ones where the other venue was worse.</li>
+            <li>Profiles show every coin a wallet traded, including the ones where the other venue was cheaper.</li>
+            <li>
+              Tags describe a wallet&apos;s Hyperliquid activity over the last 7 days, so they appear on Hyperliquid
+              rows only.
+            </li>
             <li>
               Names are the display names wallets set themselves on the Hyperliquid leaderboard, or Hyperliquid
               vault names.

@@ -1,4 +1,4 @@
-import type { Direction, Tag, WindowKey } from "./types";
+import type { Direction, DirectionMeta, Measure, Tag, WindowCoverage, WindowKey, WindowSummary } from "./types";
 
 export const DIRECTIONS: Record<
   Direction,
@@ -30,6 +30,62 @@ export const WINDOW_LABELS: Record<WindowKey, string> = {
 export const isDirection = (v: string): v is Direction => v in DIRECTIONS;
 export const isWindow = (v: string | undefined): v is WindowKey =>
   v === "7d" || v === "30d" || v === "90d" || v === "all";
+
+export const WINDOW_ORDER: WindowKey[] = ["7d", "30d", "90d", "all"];
+export const DEFAULT_WINDOW: WindowKey = "30d";
+
+/** Windows with data of their own, shortest first (a window covering the same days as a shorter one is hidden). */
+export function windowOptions(dm: DirectionMeta): WindowKey[] {
+  return WINDOW_ORDER.filter((k) => {
+    const w = dm.windows[k];
+    return w && !w.duplicate_of;
+  });
+}
+
+/** The window to show for a requested key: a duplicate maps to the shorter window it repeats; unknown → 30 days. */
+export function resolveWindow(dm: DirectionMeta, requested?: string): WindowKey | null {
+  const key = isWindow(requested) && dm.windows[requested] ? requested : DEFAULT_WINDOW;
+  const w = dm.windows[key];
+  if (w) return w.duplicate_of ?? key;
+  return windowOptions(dm)[0] ?? null;
+}
+
+export const isSummary = (w: WindowCoverage | undefined): w is WindowSummary => !!w && "wallets" in w;
+
+/** "2026-10-01 → 2026-10-19 · 19 days with data" — the days a window actually covers. */
+export function coverageText(w: WindowCoverage): string {
+  const days = `${w.days_with_data} day${w.days_with_data === 1 ? "" : "s"} with data`;
+  return `${w.first_day} → ${w.last_day} · ${days}`;
+}
+
+/** A window's tab label: its nominal length, or the days it covers when that is shorter. */
+export function windowLabel(key: WindowKey, w: WindowCoverage | undefined): string {
+  if (!w || key === "all" || w.days == null || w.days_with_data >= w.days) return WINDOW_LABELS[key];
+  return `${WINDOW_LABELS[key]} (${w.days_with_data} with data)`;
+}
+
+export const MEASURES: Measure[] = ["mid", "raw"];
+export const DEFAULT_MEASURE: Measure = "mid";
+export const isMeasure = (v: string | undefined): v is Measure => v === "mid" || v === "raw";
+export const MEASURE_LABELS: Record<Measure, string> = { mid: "mid-adjusted", raw: "raw price" };
+export const MEASURE_HELP: Record<Measure, string> = {
+  mid: "Each venue's fill measured against its own mid price, so the standing price gap between the two venues doesn't count.",
+  raw: "Fill price on one venue minus fill price on the other, including any standing price gap between the venues.",
+};
+
+/** A flat row's total / bps / price difference under a measure. */
+export function pick<T extends { total_usd: number; total_mid_usd: number | null }>(row: T, m: Measure): number | null {
+  return m === "mid" ? row.total_mid_usd : row.total_usd;
+}
+export function pickBps<T extends { total_bps: number | null; total_mid_bps: number | null }>(
+  row: T,
+  m: Measure,
+): number | null {
+  return m === "mid" ? row.total_mid_bps : row.total_bps;
+}
+export function pickPx<T extends { px_usd: number; px_mid_usd: number | null }>(row: T, m: Measure): number | null {
+  return m === "mid" ? row.px_mid_usd : row.px_usd;
+}
 
 const ZERO = 0.005;
 
@@ -71,6 +127,9 @@ export function fmtBps(v: number | null | undefined, signed = true): string {
 export const fmtInt = (v: number | null | undefined) =>
   v == null || !Number.isFinite(v) ? "—" : v.toLocaleString("en-US");
 
+/** "1 wallet", "2,345 wallets". */
+export const fmtWallets = (n: number) => `${fmtInt(n)} wallet${n === 1 ? "" : "s"}`;
+
 export function fmtPx(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return "—";
   const a = Math.abs(v);
@@ -83,9 +142,12 @@ export const shortAddr = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 export const signClass = (v: number | null | undefined) =>
   v == null || !Number.isFinite(v) || Math.abs(v) < ZERO ? "" : v > 0 ? "ex-pos" : "ex-neg";
 
+export const isZero = (v: number | null | undefined) => v == null || !Number.isFinite(v) || Math.abs(v) < ZERO;
+
 /** Hero / share-card phrase for a wallet's total in a direction (positive = cheaper on Lighter). */
-export function outcomeText(direction: Direction, totalUsd: number): string {
-  const better = totalUsd > -ZERO;
+export function outcomeText(direction: Direction, totalUsd: number | null): string {
+  if (isZero(totalUsd)) return "same cost on both venues";
+  const better = (totalUsd as number) > 0;
   if (direction === "hl_to_lighter") return better ? "would have saved on Lighter" : "would have paid more on Lighter";
   return better ? "saved by trading on Lighter (vs Hyperliquid)" : "would have paid less on Hyperliquid";
 }

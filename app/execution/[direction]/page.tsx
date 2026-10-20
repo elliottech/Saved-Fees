@@ -2,26 +2,43 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { NavSelect, WalletSearch } from "@/execution/client";
-import { LeaderboardTable, Pager, Section, Shell, Stat } from "@/execution/components";
+import {
+  LeaderboardTable,
+  MeasureToggle,
+  NotComparedLines,
+  Pager,
+  Section,
+  Shell,
+  SplitStats,
+  Stat,
+} from "@/execution/components";
 import { getCoins, getLeaderboard, getMeta } from "@/execution/data";
 import {
+  DEFAULT_MEASURE,
+  DEFAULT_WINDOW,
   DIRECTIONS,
-  WINDOW_LABELS,
+  MEASURE_LABELS,
+  coverageText,
   fmtBps,
   fmtInt,
   fmtUsd,
   isDirection,
-  isWindow,
-  outcomeText,
+  isMeasure,
+  isSummary,
+  pick,
+  pickBps,
+  resolveWindow,
   signClass,
+  windowLabel,
+  windowOptions,
 } from "@/execution/format";
-import type { Direction, WindowKey } from "@/execution/types";
+import type { Direction, Measure, WindowKey } from "@/execution/types";
 
 const VIEW_SIZE = 100;
 
 interface Props {
   params: { direction: string };
-  searchParams: { window?: string; coin?: string; page?: string; show?: string };
+  searchParams: { window?: string; coin?: string; page?: string; show?: string; measure?: string };
 }
 
 export function generateMetadata({ params }: Props): Metadata {
@@ -40,40 +57,47 @@ export default async function Leaderboard({ params, searchParams }: Props) {
   const dm = meta.directions[direction];
   if (!dm) notFound();
 
-  const window: WindowKey = isWindow(searchParams.window) && dm.windows[searchParams.window] ? searchParams.window : "30d";
-  const showAll = searchParams.show === "all";
+  const window = resolveWindow(dm, searchParams.window);
+  const w = window ? dm.windows[window] : undefined;
+  if (!window || !isSummary(w)) notFound();
+  const measure: Measure = isMeasure(searchParams.measure) ? searchParams.measure : DEFAULT_MEASURE;
+  const saversOnly = searchParams.show === "savers";
   const coins = (await getCoins(direction)).filter((c) => c.window === window);
   const coin = coins.find((c) => c.slug === searchParams.coin) ?? null;
   const scope = coin?.slug ?? "all";
+  const s = w[measure];
 
-  const w = dm.windows[window];
-  if (!w) notFound();
   const wallets = coin ? coin.wallets : w.wallets;
-  const positive = coin ? coin.positive_wallets : w.positive_wallets;
-  // Shown 100 at a time; the data files hold meta.page_size (1000) ranks each.
-  const pages = Math.max(1, Math.ceil((showAll ? wallets : positive) / VIEW_SIZE));
+  const positive = coin ? (measure === "mid" ? coin.positive_wallets_mid : coin.positive_wallets) : s.positive_wallets;
+  // Shown 100 at a time; the data files hold meta.page_size ranks each.
+  const pages = Math.max(1, Math.ceil((saversOnly ? positive : wallets) / VIEW_SIZE));
   const page = Math.min(pages, Math.max(1, Math.floor(Number(searchParams.page)) || 1));
   const firstRank = (page - 1) * VIEW_SIZE + 1;
-  const lb = await getLeaderboard(direction, window, scope, Math.ceil(firstRank / meta.page_size));
+  const lb = await getLeaderboard(direction, window, measure, scope, Math.ceil(firstRank / meta.page_size));
   const rows = (lb?.rows ?? []).filter(
-    (r) => r.rank >= firstRank && r.rank < firstRank + VIEW_SIZE && (showAll || r.rank <= positive),
+    (r) => r.rank >= firstRank && r.rank < firstRank + VIEW_SIZE && (!saversOnly || r.rank <= positive),
   );
 
-  const href = (p: Partial<{ window: string; coin: string | null; page: number; show: boolean }>) => {
+  const href = (
+    p: Partial<{ window: WindowKey; coin: string | null; page: number; savers: boolean; measure: Measure }>,
+  ) => {
     const q = new URLSearchParams();
     const win = p.window ?? window;
     const c = p.coin === undefined ? coin?.slug : p.coin;
-    const s = p.show ?? showAll;
-    if (win !== "30d") q.set("window", win);
+    const sv = p.savers ?? saversOnly;
+    const m = p.measure ?? measure;
+    if (win !== DEFAULT_WINDOW) q.set("window", win);
     if (c) q.set("coin", c);
     if (p.page && p.page > 1) q.set("page", String(p.page));
-    if (s) q.set("show", "all");
+    if (sv) q.set("show", "savers");
+    if (m !== DEFAULT_MEASURE) q.set("measure", m);
     const qs = q.toString();
     return `/execution/${direction}${qs ? `?${qs}` : ""}`;
   };
 
   const info = DIRECTIONS[direction];
   const other = (Object.keys(DIRECTIONS) as Direction[]).find((d) => d !== direction && meta.directions[d]);
+  const coinTotal = coin ? pick(coin, measure) : null;
 
   return (
     <Shell subtitle={`${info.question}.`}>
@@ -95,9 +119,11 @@ export default async function Leaderboard({ params, searchParams }: Props) {
           <NavSelect
             label="window"
             value={window}
-            options={(meta.windows as WindowKey[])
-              .filter((k) => dm.windows[k])
-              .map((k) => ({ value: k, label: WINDOW_LABELS[k], href: href({ window: k, page: 1, coin: null }) }))}
+            options={windowOptions(dm).map((k) => ({
+              value: k,
+              label: windowLabel(k, dm.windows[k]),
+              href: href({ window: k, page: 1, coin: null }),
+            }))}
           />
           <NavSelect
             label="coin"
@@ -107,32 +133,44 @@ export default async function Leaderboard({ params, searchParams }: Props) {
               ...coins.map((c) => ({ value: c.slug, label: c.coin, href: href({ coin: c.slug, page: 1 }) })),
             ]}
           />
-          <Link className="action-btn ex-small-btn" href={href({ show: !showAll, page: 1 })}>
-            {showAll ? "savers only" : "show every wallet"}
+          <Link className="action-btn ex-small-btn" href={href({ savers: !saversOnly, page: 1 })}>
+            {saversOnly ? "show every wallet" : "only wallets cheaper on Lighter"}
           </Link>
         </div>
+        <MeasureToggle measure={measure} href={(m) => href({ measure: m, page: 1 })} />
+        <p className="ex-coverage">{coverageText(w)}</p>
         <div className="ex-stats">
           {coin ? (
             <>
-              <Stat label="wallets" value={fmtInt(coin.wallets)} sub={`${fmtInt(coin.positive_wallets)} saved`} />
-              <Stat label="all wallets, net" value={fmtUsd(coin.total_usd, true)} sub={fmtBps(coin.total_bps)} tone={signClass(coin.total_usd)} />
-              <Stat label="volume replayed" value={fmtUsd(coin.replayed_notional)} />
+              <Stat
+                label="net, all wallets"
+                value={fmtUsd(coinTotal, true)}
+                sub={fmtBps(pickBps(coin, measure))}
+                tone={signClass(coinTotal)}
+              />
+              <Stat label="wallets" value={fmtInt(coin.wallets)} sub={`${fmtInt(positive)} cheaper on Lighter`} />
+              <Stat label="volume compared" value={fmtUsd(coin.replayed_notional)} />
             </>
           ) : (
             <>
-              <Stat label="saved by savers" value={fmtUsd(w.positive_total_usd)} sub={`${fmtInt(w.positive_wallets)} of ${fmtInt(w.wallets)} wallets`} tone="ex-pos" />
-              <Stat label="all wallets, net" value={fmtUsd(w.total_usd, true)} sub={fmtBps(w.total_bps)} tone={signClass(w.total_usd)} />
-              <Stat label="volume replayed" value={fmtUsd(w.replayed_notional)} sub={`${w.start} → ${w.end}`} />
+              <Stat
+                label="net, all wallets"
+                value={fmtUsd(s.total_usd, true)}
+                sub={`${fmtBps(s.total_bps)} on ${fmtUsd(w.replayed_notional)} compared`}
+                tone={signClass(s.total_usd)}
+              />
+              <SplitStats s={s} wallets={w.wallets} />
             </>
           )}
         </div>
+        {!coin && <NotComparedLines nc={w.not_compared} target={info.target} />}
         <p className="ex-muted ex-small">
-          {showAll
-            ? `All ${fmtInt(wallets)} wallets, best to worst.`
-            : `The ${fmtInt(positive)} wallets that ${outcomeText(direction, 1)}, best first.`}{" "}
-          Saved = fee difference + execution price difference.
+          {saversOnly
+            ? `The ${fmtInt(positive)} wallets that came out cheaper on Lighter, best first.`
+            : `All ${fmtInt(wallets)} wallets, cheapest on Lighter first.`}{" "}
+          Saved = venue fee difference + price difference ({MEASURE_LABELS[measure]}); bps over compared volume.
         </p>
-        <LeaderboardTable rows={rows} publicTags={meta.public_tags} showTopCoin={!coin} />
+        <LeaderboardTable rows={rows} publicTags={meta.public_tags} measure={measure} showTopCoin={!coin} />
         <Pager page={page} pages={pages} href={(p) => href({ page: p })} />
       </Section>
     </Shell>

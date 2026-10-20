@@ -1,8 +1,23 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { ThemeToggle } from "./client";
-import { fmtBps, fmtInt, fmtUsd, shortAddr, signClass, tagText, tagValue } from "./format";
-import type { LeaderboardRow, Tag } from "./types";
+import {
+  MEASURES,
+  MEASURE_HELP,
+  MEASURE_LABELS,
+  fmtBps,
+  fmtInt,
+  fmtUsd,
+  fmtWallets,
+  pick,
+  pickBps,
+  pickPx,
+  shortAddr,
+  signClass,
+  tagText,
+  tagValue,
+} from "./format";
+import type { LeaderboardRow, Measure, MeasureSummary, NotCompared, Tag } from "./types";
 
 export function Shell({ children, subtitle }: { children: ReactNode; subtitle?: ReactNode }) {
   return (
@@ -76,13 +91,56 @@ export function WalletCell({ address, name }: { address: string; name: string | 
   );
 }
 
+/** Mid-adjusted / raw price switch (links, so it works without client JS). */
+export function MeasureToggle({ measure, href }: { measure: Measure; href: (m: Measure) => string }) {
+  return (
+    <nav className="ex-tabs ex-measure" aria-label="price measure">
+      <span className="ex-muted">price:</span>
+      {MEASURES.map((m) =>
+        m === measure ? (
+          <b key={m} title={MEASURE_HELP[m]}>
+            {MEASURE_LABELS[m]}
+          </b>
+        ) : (
+          <Link key={m} href={href(m)} title={MEASURE_HELP[m]}>
+            {MEASURE_LABELS[m]}
+          </Link>
+        ),
+      )}
+    </nav>
+  );
+}
+
+/** "Not compared" volume: shown next to the totals, never inside them. */
+export function NotComparedLines({ nc, target }: { nc: NotCompared | undefined; target: string }) {
+  if (!nc) return null;
+  const lines: [string, number][] = [
+    ["Liquidations", nc.liquidation_notional],
+    [`Book too thin on ${target} (fill > 100 bps from mid)`, nc.thin_notional],
+    [`Other (coin not on both venues, no book data)`, nc.other_notional],
+  ];
+  const shown = lines.filter(([, v]) => v >= 0.5);
+  if (!shown.length) return null;
+  return (
+    <ul className="ex-not-compared">
+      {shown.map(([label, v]) => (
+        <li key={label}>
+          {label}: <b>{fmtUsd(v)}</b> <span className="ex-muted">(not compared)</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function LeaderboardTable({
   rows,
   publicTags,
+  measure,
   showTopCoin = true,
 }: {
   rows: LeaderboardRow[];
   publicTags: Record<string, string>;
+  measure: Measure;
   showTopCoin?: boolean;
 }) {
   if (!rows.length) return <p className="ex-muted">No wallets in this view.</p>;
@@ -94,10 +152,10 @@ export function LeaderboardTable({
             <th>#</th>
             <th>wallet</th>
             <th className="num" title="fee difference + price difference; positive = cheaper on Lighter">saved</th>
-            <th className="num">bps</th>
-            <th className="num ex-hide-sm" title="Hyperliquid fee − Lighter fee">fees</th>
-            <th className="num ex-hide-sm" title="cost on Hyperliquid's book − cost on Lighter's">price</th>
-            <th className="num ex-hide-sm">volume</th>
+            <th className="num" title="saved / compared volume">bps</th>
+            <th className="num ex-hide-sm" title="Hyperliquid venue fee − Lighter venue fee">fees</th>
+            <th className="num ex-hide-sm" title={MEASURE_HELP[measure]}>price</th>
+            <th className="num ex-hide-sm" title="compared taker volume">volume</th>
             {showTopCoin && <th className="ex-hide-sm">top coin</th>}
           </tr>
         </thead>
@@ -109,10 +167,10 @@ export function LeaderboardTable({
                 <WalletCell address={r.address} name={r.name} />
                 <Tags tags={r.tags} publicTags={publicTags} />
               </td>
-              <td className={`num ${signClass(r.total_usd)}`}>{fmtUsd(r.total_usd, true)}</td>
-              <td className={`num ${signClass(r.total_bps)}`}>{fmtBps(r.total_bps)}</td>
+              <td className={`num ${signClass(pick(r, measure))}`}>{fmtUsd(pick(r, measure), true)}</td>
+              <td className={`num ${signClass(pickBps(r, measure))}`}>{fmtBps(pickBps(r, measure))}</td>
               <td className={`num ex-hide-sm ${signClass(r.fee_saved_usd)}`}>{fmtUsd(r.fee_saved_usd, true)}</td>
-              <td className={`num ex-hide-sm ${signClass(r.px_usd)}`}>{fmtUsd(r.px_usd, true)}</td>
+              <td className={`num ex-hide-sm ${signClass(pickPx(r, measure))}`}>{fmtUsd(pickPx(r, measure), true)}</td>
               <td className="num ex-hide-sm">{fmtUsd(r.replayed_notional)}</td>
               {showTopCoin && <td className="ex-hide-sm">{r.top_coin ?? "—"}</td>}
             </tr>
@@ -120,6 +178,26 @@ export function LeaderboardTable({
         </tbody>
       </table>
     </div>
+  );
+}
+
+/** The wallets on each side of zero: "saved by X wallets" / "cost Y wallets more". */
+export function SplitStats({ s, wallets }: { s: MeasureSummary; wallets: number }) {
+  return (
+    <>
+      <Stat
+        label={`saved by ${fmtWallets(s.positive_wallets)}`}
+        value={fmtUsd(s.positive_total_usd, true)}
+        sub={`cheaper on Lighter · of ${fmtInt(wallets)}`}
+        tone={signClass(s.positive_total_usd)}
+      />
+      <Stat
+        label={`cost ${fmtWallets(s.negative_wallets)} more`}
+        value={fmtUsd(s.negative_total_usd, true)}
+        sub={`cheaper on Hyperliquid · of ${fmtInt(wallets)}`}
+        tone={signClass(s.negative_total_usd)}
+      />
+    </>
   );
 }
 
@@ -133,39 +211,54 @@ export function Stat({ label, value, sub, tone }: { label: string; value: ReactN
   );
 }
 
-/** Daily bars (green / red) with the cumulative total as a line. Pure SVG, no client JS. */
-export function DailyChart({ days }: { days: { day: string; total_usd: number }[] }) {
+const DAY_MS = 86_400_000;
+const dayNum = (d: string) => Math.round(Date.parse(`${d}T00:00:00Z`) / DAY_MS);
+
+/**
+ * Daily bars (green / red) on a date axis — days without data stay empty — with the
+ * cumulative total as a step line. Pure SVG, no client JS.
+ */
+export function DailyChart({ days, label = "Daily totals" }: { days: { day: string; total: number }[]; label?: string }) {
   if (!days.length) return <p className="ex-muted">No data.</p>;
   const W = 640;
   const H = 180;
   const PAD = 4;
+  const d0 = dayNum(days[0].day);
+  const span = dayNum(days[days.length - 1].day) - d0 + 1;
+  const missing = span - days.length;
   let run = 0;
-  const cum = days.map((d) => (run += d.total_usd));
-  const lo = Math.min(0, ...days.map((d) => d.total_usd), ...cum);
-  const hi = Math.max(0, ...days.map((d) => d.total_usd), ...cum);
-  const span = hi - lo || 1;
-  const y = (v: number) => PAD + ((hi - v) / span) * (H - 2 * PAD);
-  const bw = (W - 2 * PAD) / days.length;
-  const line = cum
-    .map((v, i) => `${i ? "L" : "M"}${(PAD + bw * (i + 0.5)).toFixed(1)},${y(v).toFixed(1)}`)
+  const cum = days.map((d) => (run += d.total));
+  const lo = Math.min(0, ...days.map((d) => d.total), ...cum);
+  const hi = Math.max(0, ...days.map((d) => d.total), ...cum);
+  const range = hi - lo || 1;
+  const y = (v: number) => PAD + ((hi - v) / range) * (H - 2 * PAD);
+  const bw = (W - 2 * PAD) / span;
+  const x = (d: string) => PAD + bw * (dayNum(d) - d0);
+  // Flat through days without data, then a step at each day.
+  const line = days
+    .map((d, i) => {
+      const xc = x(d.day) + bw / 2;
+      const prev = i ? `L${xc.toFixed(1)},${y(cum[i - 1]).toFixed(1)} ` : `M${xc.toFixed(1)},${y(0).toFixed(1)} `;
+      return `${prev}L${xc.toFixed(1)},${y(cum[i]).toFixed(1)}`;
+    })
     .join(" ");
   return (
     <div className="ex-chart">
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label="Daily savings">
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label={label}>
         <line x1={0} x2={W} y1={y(0)} y2={y(0)} className="ex-chart-zero" />
         {days.map((d, i) => {
-          const top = y(Math.max(0, d.total_usd));
-          const h = Math.max(1, Math.abs(y(d.total_usd) - y(0)));
+          const top = y(Math.max(0, d.total));
+          const h = Math.max(1, Math.abs(y(d.total) - y(0)));
           return (
             <rect
               key={d.day}
-              x={PAD + bw * i + bw * 0.12}
+              x={x(d.day) + bw * 0.12}
               width={Math.max(1, bw * 0.76)}
               y={top}
               height={h}
-              className={d.total_usd >= 0 ? "ex-bar-pos" : "ex-bar-neg"}
+              className={d.total >= 0 ? "ex-bar-pos" : "ex-bar-neg"}
             >
-              <title>{`${d.day}: ${fmtUsd(d.total_usd, true)} (cumulative ${fmtUsd(cum[i], true)})`}</title>
+              <title>{`${d.day}: ${fmtUsd(d.total, true)} (cumulative ${fmtUsd(cum[i], true)})`}</title>
             </rect>
           );
         })}
@@ -175,6 +268,7 @@ export function DailyChart({ days }: { days: { day: string; total_usd: number }[
         <span>{days[0].day}</span>
         <span>
           cumulative <b className={signClass(cum[cum.length - 1])}>{fmtUsd(cum[cum.length - 1], true)}</b>
+          {missing > 0 && <span>{` · ${missing} day${missing === 1 ? "" : "s"} without data`}</span>}
         </span>
         <span>{days[days.length - 1].day}</span>
       </div>

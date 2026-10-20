@@ -1,22 +1,25 @@
 import { cache } from "react";
 import { gunzipSync } from "zlib";
-import type {
-  CoinSummary,
-  Direction,
-  LeaderboardPage,
-  LeaderboardRow,
-  Latest,
-  MarketDay,
-  Meta,
-  Table,
-  Tag,
-  Wallet,
-  WalletCoin,
-  WalletDay,
-  WalletDirection,
-  WalletOrder,
-  WalletWindow,
-  WindowKey,
+import {
+  SCHEMA,
+  type CoinSummary,
+  type Direction,
+  type LeaderboardPage,
+  type LeaderboardRow,
+  type Latest,
+  type MarketDay,
+  type Measure,
+  type Meta,
+  type OrderKind,
+  type Table,
+  type Tag,
+  type Wallet,
+  type WalletCoin,
+  type WalletDay,
+  type WalletDirection,
+  type WalletOrder,
+  type WalletWindow,
+  type WindowKey,
 } from "./types";
 
 /** Base URL of the public dataset (R2 custom domain, or a local folder served over HTTP in dev). */
@@ -64,13 +67,21 @@ function objects<T>(table: Table | null | undefined): T[] {
 export const getMeta = cache(async (): Promise<Meta> => {
   const meta = await getFile<Meta>("meta.json");
   if (!meta) throw new Error("execution dataset: meta.json missing");
+  if (meta.schema !== SCHEMA) throw new Error(`execution dataset: schema ${meta.schema}, expected ${SCHEMA}`);
   return meta;
 });
 
+/** *window* must be a window with files of its own (see resolveWindow). */
 export const getLeaderboard = cache(
-  async (direction: Direction, window: WindowKey, scope: string, page: number): Promise<LeaderboardPage | null> => {
+  async (
+    direction: Direction,
+    window: WindowKey,
+    measure: Measure,
+    scope: string,
+    page: number,
+  ): Promise<LeaderboardPage | null> => {
     const raw = await getFile<Omit<LeaderboardPage, "rows"> & Table>(
-      `lb/${direction}/${window}/${scope}/${page}.json`,
+      `lb/${direction}/${window}/${measure}/${scope}/${page}.json`,
     );
     if (!raw) return null;
     return { ...raw, rows: objects<LeaderboardRow>(raw) };
@@ -106,13 +117,13 @@ interface RawShard {
           windows: Partial<Record<WindowKey, WalletWindow>>;
           coins: unknown[][];
           daily: unknown[][];
-          best: unknown[][];
-          worst: unknown[][];
-        }
+        } & Record<OrderKind, unknown[][]>
       >;
     }
   >;
 }
+
+const ORDER_KINDS: OrderKind[] = ["best_mid", "worst_mid", "best", "worst"];
 
 export const getWallet = cache(async (address: string): Promise<Wallet | null> => {
   const addr = address.toLowerCase();
@@ -122,12 +133,14 @@ export const getWallet = cache(async (address: string): Promise<Wallet | null> =
   if (!shard || !raw) return null;
   const directions: Partial<Record<Direction, WalletDirection>> = {};
   for (const [dir, d] of Object.entries(raw.directions)) {
+    const orders = Object.fromEntries(
+      ORDER_KINDS.map((k) => [k, objects<WalletOrder>({ columns: shard.columns.orders, rows: d[k] ?? [] })]),
+    ) as Record<OrderKind, WalletOrder[]>;
     directions[dir as Direction] = {
       windows: d.windows,
       coins: objects<WalletCoin>({ columns: shard.columns.coins, rows: d.coins }),
       daily: objects<WalletDay>({ columns: shard.columns.daily, rows: d.daily }),
-      best: objects<WalletOrder>({ columns: shard.columns.orders, rows: d.best }),
-      worst: objects<WalletOrder>({ columns: shard.columns.orders, rows: d.worst }),
+      ...orders,
     };
   }
   return { address: addr, name: raw.name, tags: raw.tags, directions };

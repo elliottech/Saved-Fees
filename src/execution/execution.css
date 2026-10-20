@@ -238,3 +238,15 @@
     .section-block { padding: 18px 16px; }
     .ex-stats { grid-template-columns: 1fr 1fr; }
 }
+
+/* Measure switch, not-compared lines, window coverage */
+.ex-measure { align-items: baseline; margin-bottom: 0; }
+.ex-not-compared {
+    list-style: none;
+    margin: 4px 0 16px;
+    font-size: 0.68rem;
+    color: var(--text-dim);
+    line-height: 1.7;
+}
+.ex-not-compared b { color: var(--text); font-weight: 600; }
+.ex-coverage { font-size: 0.66rem; color: var(--text-muted); margin-bottom: 12px; }
